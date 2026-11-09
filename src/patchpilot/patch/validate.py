@@ -63,13 +63,24 @@ def validate_patch(original_files: dict[str, str], diff_text: str, renames: list
     return None
 
 
+_PROTECTED_FILES = {"test.py", "tests.py", "fixture.py", "fixtures.py"}
+
+
 def _forbidden_path(path: str) -> bool:
-    """테스트, fixture, lock, CI, 설정, 의존성 경로면 True를 돌려준다."""
-    parts = path.split("/")
-    if any(part in FORBIDDEN_DIRS or part.endswith(".lock") for part in parts):
+    """테스트, fixture, lock, CI, 설정, 의존성 경로면 True를 돌려준다.
+
+    디렉터리와 파일 이름은 casefold로 비교한다. 이름 일부에 test가 들어간
+    일반 모듈은 여기서 막지 않는다.
+    """
+    parts = [part.casefold() for part in path.split("/")]
+    folded_dirs = {part.casefold() for part in FORBIDDEN_DIRS}
+    folded_names = {part.casefold() for part in FORBIDDEN_NAMES}
+    if any(part in folded_dirs or part.endswith(".lock") for part in parts):
         return True
-    name = parts[-1].lower()
-    if name in FORBIDDEN_NAMES or name.startswith("test_") or name.endswith("_test.py"):
+    name = parts[-1]
+    if name in folded_names or name in _PROTECTED_FILES:
+        return True
+    if name.startswith("test_") or name.endswith("_test.py"):
         return True
     if name.startswith("requirements") and name.endswith(".txt"):
         return True

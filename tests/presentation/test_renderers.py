@@ -26,7 +26,7 @@ def sample(outcome: str, reason: str | None, existence: str, url=None) -> dict:
         "mode": "C",
         "stages": [
             {"name": "diff_spec", "status": "skipped", "attempts": 0},
-            {"name": "test_baseline_v1", "status": "blocked", "attempts": 1, "reason_code": "E_INTERNAL"},
+            {"name": "test_baseline_v1", "status": "blocked", "attempts": 1, "reason_code": "E_RUNTIME_NOT_READY"},
         ],
         "tests": {
             "baseline_v1": {"result": "not_run", "expected": "pass"},
@@ -55,7 +55,7 @@ class RendererTests(unittest.TestCase):
 
     def test_report_shows_expected_fail_and_full_identifier(self) -> None:
         """예상 v2 실패, not_run, 긴 식별자, 데이터 고지를 축약하지 않는다."""
-        manifest = sample("error", "E_INTERNAL", "unknown")
+        manifest = sample("error", "E_RUNTIME_NOT_READY", "unknown")
         report = render_report(manifest)
         self.assertIn("result=not_run expected=fail", report)
         self.assertIn("a" * 64, report)
@@ -63,7 +63,9 @@ class RendererTests(unittest.TestCase):
         self.assertIn("PR creation status unknown. Manual verification required. Do not retry automatically.", report)
         self.assertIn("Blocked stages were not executed: test_baseline_v1", report)
         self.assertIn("status=blocked", report)
-        self.assertIn("reason=E_INTERNAL", report)
+        self.assertIn("reason=E_RUNTIME_NOT_READY", report)
+        self.assertIn("Runtime prerequisites are not verified. No customer tests were executed.", report)
+        self.assertNotIn("Internal error. See report.", report)
         self.assertNotIn("\x1b", report)
         self.assertNotIn("Validated on", report)
 
@@ -81,7 +83,8 @@ class RendererTests(unittest.TestCase):
 
     def test_pr_existence_four_states_are_explicit(self) -> None:
         """exists, absent, unknown, not_attempted를 서로 다른 문장으로 보여 준다."""
-        exists = render_stdout(sample("error", "E_INTERNAL", "exists", "https://example.test/pull/1"))
+        exists = render_stdout(sample("error", "E_RUNTIME_NOT_READY", "exists", "https://example.test/pull/1"))
+        self.assertIn("Runtime prerequisites are not verified. No customer tests were executed.", exists)
         absent = render_stdout(sample("error", "E_PR_CREATE_FAILED", "absent"))
         unknown = render_stdout(sample("error", "E_PR_RESULT_UNKNOWN", "unknown"))
         skipped = render_stdout(sample("hold", "H_UNRESOLVED", "not_attempted"))

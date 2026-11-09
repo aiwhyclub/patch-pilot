@@ -9,6 +9,7 @@ from patchpilot.schema.codes import (
     BLOCK_CODES,
     DATA_NOTICE,
     ERROR_CODES,
+    E_RUNTIME_NOT_READY,
     HOLD_CODES,
     PR_ABSENT,
     PR_EXISTS,
@@ -192,4 +193,35 @@ def validate_manifest(manifest: dict) -> list[str]:
     if "Validated on" in manifest["data_notice"]:
         errors.append("validated wording")
     errors.extend(acquisition_problems(manifest))
+    errors.extend(_runtime_block_problems(manifest))
+    return errors
+
+
+def _runtime_block_problems(manifest: dict) -> list[str]:
+    """런타임 미준비는 not_run과 후속 skipped를 유지해야 한다."""
+    if manifest.get("reason_code") != E_RUNTIME_NOT_READY:
+        return []
+    errors = []
+    if manifest.get("outcome") != "error":
+        errors.append("runtime outcome")
+    tests = manifest.get("tests") or {}
+    for name in ("baseline_v1", "unpatched_v2", "patched_v2"):
+        if (tests.get(name) or {}).get("result") != "not_run":
+            errors.append(f"{name} not_run")
+    seen_block = False
+    for stage in manifest.get("stages") or []:
+        if not isinstance(stage, dict):
+            errors.append("runtime stage")
+            continue
+        if stage.get("status") == "blocked":
+            seen_block = True
+            if stage.get("reason_code") != E_RUNTIME_NOT_READY or stage.get("attempts") != 1:
+                errors.append("blocked attempts")
+            continue
+        if seen_block and stage.get("status") != "skipped":
+            errors.append("stage after block")
+        if seen_block and (stage.get("attempts") != 0 or stage.get("started_at") is not None or stage.get("ended_at") is not None):
+            errors.append("skipped after block")
+    if not seen_block:
+        errors.append("runtime stage")
     return errors

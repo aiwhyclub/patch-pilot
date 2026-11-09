@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 
-from patchpilot.schema.codes import H_BASE_MOVED
+from patchpilot.schema.codes import E_RUNTIME_NOT_READY, H_BASE_MOVED
 
 
 _SHA = re.compile(r"^[0-9a-fA-F]{40}$|^[0-9a-fA-F]{64}$")
@@ -23,6 +23,17 @@ _NEEDS_SECOND_CHECK = ("draft_pr_opened", "patch_only")
 def readonly_adapter_connected() -> bool:
     """고객 repo SHA adapter가 연결되어 있으면 True다. 이 빌드에서는 False다."""
     return False
+
+
+def adapter_block_cause() -> dict:
+    """SHA adapter가 왜 연결되어 있지 않은지 돌려준다. git은 실행하지 않는다."""
+    return {
+        "connected": False,
+        "network": False,
+        "invokes_git": False,
+        "reason_code": E_RUNTIME_NOT_READY,
+        "cause": "readonly base SHA adapter is not connected; customer repo, credentials, and hook policy are unset",
+    }
 
 
 def observe_injected(payload: dict | None) -> dict:

@@ -121,6 +121,12 @@ def _schema_forbidden(value) -> bool:
     return False
 
 
+def _path_item_extra(doc: dict, path: str) -> dict:
+    """operation 객체가 아닌 path item 필드를 비교용으로 돌려준다."""
+    item = doc["paths"][path]
+    return {key: value for key, value in item.items() if key not in HTTP_METHODS}
+
+
 def _operations(doc: dict):
     """operation이 정확히 하나일 때만 (method, path, operation) 목록을 돌려준다."""
     paths = doc.get("paths")
@@ -280,11 +286,16 @@ def classify_documents(old_doc, new_doc, mapping) -> ClassifyResult:
         return ClassifyResult(reason_code=H_UNSUPPORTED_SPEC)
     old_method, old_path, old_op = _operations(old_doc)[0]
     new_method, new_path, new_op = _operations(new_doc)[0]
+    path_extra_same = old_path == new_path and _canon(_path_item_extra(old_doc, old_path)) == _canon(
+        _path_item_extra(new_doc, new_path)
+    )
     entries, map_err = _parse_mapping(mapping)
     if map_err:
         return ClassifyResult(reason_code=map_err)
     if not entries:
-        same = old_method == new_method and old_path == new_path and _canon(old_op) == _canon(new_op)
+        same = old_method == new_method and old_path == new_path and _canon(old_op) == _canon(new_op) and path_extra_same
+        if old_method == new_method and old_path == new_path and _canon(old_op) == _canon(new_op) and not path_extra_same:
+            return ClassifyResult(reason_code=H_UNSUPPORTED_KIND)
         return ClassifyResult(reason_code=H_NO_CHANGE if same else H_NO_MAPPING)
     if (old_method, old_path) != (new_method, new_path):
         entry = entries[0]
@@ -336,7 +347,7 @@ def classify_documents(old_doc, new_doc, mapping) -> ClassifyResult:
         changes.append(_make_change(old_method, old_path, entry, "field_renamed", True, True, None))
     if hold:
         return ClassifyResult(changes=changes, reason_code=hold)
-    if _canon(old_op) != _canon(working):
+    if _canon(old_op) != _canon(working) or not path_extra_same:
         if changes:
             changes[-1].supported = False
             changes[-1].reason = H_UNSUPPORTED_KIND

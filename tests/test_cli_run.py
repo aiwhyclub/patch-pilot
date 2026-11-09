@@ -20,7 +20,7 @@ sys.path.insert(0, str(ROOT))
 from patchpilot.cli.main import main
 from patchpilot.collector.evidence import baseline_stages_recorded
 from patchpilot.core.orchestrator import RunConfig, execute
-from patchpilot.schema.codes import DATA_NOTICE, E_BASELINE_FAIL, E_INTERNAL, E_MODE_UNSUPPORTED, H_UNRESOLVED
+from patchpilot.schema.codes import DATA_NOTICE, E_BASELINE_FAIL, E_MODE_UNSUPPORTED, E_RUNTIME_NOT_READY, H_UNRESOLVED
 from patchpilot.schema.manifest import validate_manifest
 
 
@@ -119,8 +119,8 @@ def config(base: Path, **overrides) -> RunConfig:
 
 
 class CliRunTests(unittest.TestCase):
-    def test_direct_binding_blocks_with_e_internal_not_baseline_fail(self) -> None:
-        """직접 JSON 대입을 찾은 뒤의 E_INTERNAL은 baseline 실패가 아니고 프로세스를 시작하지 않는다."""
+    def test_direct_binding_blocks_with_runtime_not_ready(self) -> None:
+        """직접 JSON 대입 뒤의 차단은 E_RUNTIME_NOT_READY이고 테스트 결과는 not_run이다."""
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             write_tree(base, DIRECT_CLIENT)
@@ -134,7 +134,7 @@ class CliRunTests(unittest.TestCase):
             self.assertEqual(code, 30)
             self.assertEqual(validate_manifest(manifest), [])
             self.assertEqual(manifest["outcome"], "error")
-            self.assertEqual(manifest["reason_code"], E_INTERNAL)
+            self.assertEqual(manifest["reason_code"], E_RUNTIME_NOT_READY)
             self.assertNotEqual(manifest["reason_code"], E_BASELINE_FAIL)
             self.assertNotEqual(manifest["outcome"], "pr_gate_blocked")
             self.assertEqual(manifest["mode"], "A")
@@ -158,7 +158,8 @@ class CliRunTests(unittest.TestCase):
             blocked = by_name["test_baseline_v1"]
             self.assertEqual(blocked["status"], "blocked")
             self.assertEqual(blocked["attempts"], 1)
-            self.assertEqual(blocked["reason_code"], E_INTERNAL)
+            self.assertEqual(blocked["reason_code"], E_RUNTIME_NOT_READY)
+            self.assertEqual(blocked["attempts"], 1)
             self.assertIsNotNone(blocked["started_at"])
             self.assertIsNotNone(blocked["ended_at"])
             self.assertIn("+09:00", blocked["started_at"])
@@ -184,16 +185,19 @@ class CliRunTests(unittest.TestCase):
             self.assertEqual(scan["sites"][0]["binding"], "direct_json_response")
             index = json.loads((base / "out" / "collector-index.json").read_text(encoding="utf-8"))
             self.assertFalse(baseline_stages_recorded(index))
+            planned = [item for item in index if item.get("executed") is False]
+            self.assertEqual({item["stage"] for item in planned}, {"test_baseline_v1", "test_unpatched_v2", "test_patched_v2"})
             self.assertEqual(hashlib.sha256((base / "checkout" / "client.py").read_bytes()).hexdigest(), before)
             self.assertFalse((base / "out" / "patch.diff").exists())
             self.assertIn(DATA_NOTICE, report)
             self.assertIn("status=blocked", report)
-            self.assertIn("reason=E_INTERNAL", report)
+            self.assertIn("reason=E_RUNTIME_NOT_READY", report)
             self.assertIn("result=not_run", report)
-            self.assertIn("not E_BASELINE_FAIL", err)
+            self.assertIn("one supervisor evaluation", err)
             self.assertIn("not_run", err)
-            self.assertIn("No customer process was started", err)
-            self.assertIn("Internal error. See report.", out)
+            self.assertIn("Runtime prerequisites are not verified. No customer tests were executed.", err)
+            self.assertIn("Runtime prerequisites are not verified. No customer tests were executed.", out)
+            self.assertNotIn("Internal error. See report.", out)
             self.assertIn("PR creation not attempted.", out)
             self.assertNotIn("temperature_2m", (base / "checkout" / "client.py").read_text(encoding="utf-8"))
 
@@ -227,7 +231,7 @@ class CliRunTests(unittest.TestCase):
             manifest = json.loads((base / "out" / "manifest.json").read_text(encoding="utf-8"))
             self.assertEqual(code, 30)
             self.assertEqual(manifest["outcome"], "error")
-            self.assertEqual(manifest["reason_code"], E_INTERNAL)
+            self.assertEqual(manifest["reason_code"], E_RUNTIME_NOT_READY)
             self.assertEqual(manifest["pr"]["existence"], "not_attempted")
             self.assertFalse(manifest["approval"]["verified"])
             self.assertIsNone(manifest["approval"]["bound_base_sha"])

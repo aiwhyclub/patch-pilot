@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import re
 
-# 탐지용 패턴. 테스트에는 명백한 가짜 값만 넣는다.
+# 후보 패턴이다. 비밀의 모든 형태를 찾는 스캐너가 아니다.
 SECRET_PATTERNS = (
     re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----"),
     re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
@@ -16,6 +16,9 @@ SECRET_PATTERNS = (
     re.compile(r"\bsk-[A-Za-z0-9]{20,}\b"),
     re.compile(
         r"(?i)\b(api[_-]?key|secret|token|password)\b\s*[:=]\s*['\"][^'\"]{8,}['\"]"
+    ),
+    re.compile(
+        r"(?i)\b(api[_-]?key|secret|token|password)\b\s*[:=]\s*[A-Za-z0-9+/=_.\-]{8,}"
     ),
     re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._\-]{16,}\b"),
 )

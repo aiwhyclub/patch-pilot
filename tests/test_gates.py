@@ -143,6 +143,12 @@ class GateTests(unittest.TestCase):
     def test_secret_mask_and_limits(self) -> None:
         """가짜 비밀은 가리고, 계약 시간표와 로그 상한은 문서 값과 같다."""
         self.assertTrue(contains_secret("aws AKIAFAKEFAKEFAKEFAKE key"))
+        self.assertTrue(contains_secret("password=supersecretvalue"))
+        self.assertTrue(contains_secret("api_key=supersecretvalue"))
+        self.assertEqual(
+            model_send_decision(consent=True, excerpt="password=supersecretvalue", endpoint_approved=True),
+            H_MODEL_SEND_BLOCKED,
+        )
         self.assertEqual(mask_text("AKIAFAKEFAKEFAKEFAKE"), "[REDACTED]")
         self.assertEqual(STAGE_LIMITS["pr_evidence_gate"], {"timeout_seconds": 30, "max_attempts": 1})
         self.assertEqual(STAGE_LIMITS["patch_generate"]["max_attempts"], 3)
@@ -212,6 +218,9 @@ class SourceBoundaryTests(unittest.TestCase):
             ROOT / "tests/test_cli_run.py",
             ROOT / "tests/test_classify_scan_patch.py",
             ROOT / "tests/test_base_sha.py",
+            ROOT / "tests/test_inactive_runtime.py",
+            ROOT / "src/patchpilot/runner/supervisor.py",
+            ROOT / "src/patchpilot/core/approval.py",
             ROOT / "tests/presentation/test_renderers.py",
         ]
         for path in paths:

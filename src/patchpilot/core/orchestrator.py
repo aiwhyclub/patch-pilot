@@ -13,7 +13,6 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from patchpilot.collector.evidence import file_record
 from patchpilot.core.capability import enforce_unproven_block
 from patchpilot.core.paths import (
     BoundaryError,
@@ -25,13 +24,18 @@ from patchpilot.core.paths import (
     require_real_file,
 )
 from patchpilot.diff_spec.classify import classify_documents, load_json_bytes
-from patchpilot.runner.guard import execution_block_reason
+from patchpilot.collector.evidence import file_record, plan_lock_snapshots
+from patchpilot.core.approval import execution_binding_decision
+from patchpilot.core.base_sha import adapter_block_cause
+from patchpilot.pr.ledger import pr_stage_blocked
+from patchpilot.runner.supervisor import readiness_from_constants
 from patchpilot.scan.ast_scan import scan_files
 from patchpilot.schema.codes import (
     DATA_NOTICE,
     E_INPUT,
     E_INTERNAL,
     E_MODE_UNSUPPORTED,
+    E_RUNTIME_NOT_READY,
     E_OUTPUT_ROOT,
     E_PATH_BOUNDARY,
     H_UNRESOLVED,
@@ -196,17 +200,29 @@ def execute(config: RunConfig, stdout=None, stderr=None) -> int:
     if scanned.unresolved or not scanned.sites:
         return finish("hold", H_UNRESOLVED)
 
-    block = execution_block_reason()
-    _mark(manifest, "test_baseline_v1", "blocked", E_INTERNAL)
-    # C14에 런타임 미검증 전용 코드가 없다. E_INTERNAL은 그 공백의 기존 error이고
-    # E_BASELINE_FAIL이나 pr_gate_blocked가 아니다. 테스트 결과는 not_run으로 둔다.
-    log(
-        "test_baseline_v1 status=blocked reason=E_INTERNAL. "
-        "This is not E_BASELINE_FAIL. baseline_v1 result stays not_run. "
-        "pr_gate_blocked is not used. No customer process was started. "
-        f"guard={block}."
+    records.extend(plan_lock_snapshots(file_record(lock_path, "test_baseline_v1", manifest["run_id"])))
+    decision = readiness_from_constants()
+    binding = execution_binding_decision(
+        None,
+        customer_repo=config.customer_repo,
+        base_branch=config.pr_base_branch,
     )
-    return finish("error", E_INTERNAL)
+    sha_adapter = adapter_block_cause()
+    _mark(manifest, "test_baseline_v1", "blocked", decision["reason_code"])
+    causes = list(decision["causes"])
+    causes.append(binding["cause"])
+    causes.append(sha_adapter["cause"])
+    if pr_stage_blocked():
+        causes.append("ledger durability across restart is not proven")
+    log(
+        "test_baseline_v1 status=blocked attempts=1 reason=E_RUNTIME_NOT_READY. "
+        "attempts counts one supervisor evaluation, not a customer process. "
+        "baseline_v1 result=not_run. "
+        + REASON_TEXT[E_RUNTIME_NOT_READY]
+        + " causes: "
+        + "; ".join(causes)
+    )
+    return finish("error", E_RUNTIME_NOT_READY)
 
 
 def _finish(config, manifest, outcome, reason, logs, records, scan_body, stdout, stderr) -> int:

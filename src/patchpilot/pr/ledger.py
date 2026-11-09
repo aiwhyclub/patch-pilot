@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 
 from patchpilot.core.capability import LEDGER_DURABILITY_PROVEN
-from patchpilot.schema.codes import E_PR_CREATE_FAILED, E_PR_RESULT_UNKNOWN
+from patchpilot.schema.codes import E_INTERNAL, E_PR_CREATE_FAILED, E_PR_RESULT_UNKNOWN, E_RUNTIME_NOT_READY
 
 
 def pr_stage_blocked() -> bool:
@@ -40,6 +40,71 @@ def append_record(path: Path, record: dict) -> None:
         os.fsync(fd)
     finally:
         os.close(fd)
+
+
+_PENDING_FIELDS = ("run_id", "idem_key", "repo", "base_branch", "diff_sha256", "state")
+
+
+def replay_lines(lines: list[str]) -> dict:
+    """append된 줄만 해석한다. 디스크 내구성이 증명됐다는 뜻은 아니다."""
+    pending_ids = []
+    for line in lines:
+        try:
+            item = json.loads(line)
+        except json.JSONDecodeError:
+            return _replay_stop(E_PR_RESULT_UNKNOWN)
+        if not isinstance(item, dict) or any(item.get(key) in (None, "") for key in _PENDING_FIELDS):
+            return _replay_stop(E_PR_RESULT_UNKNOWN)
+        if item.get("state") not in ("pending", "unknown"):
+            return _replay_stop(E_INTERNAL)
+        if item["state"] == "pending":
+            pending_ids.append(item["run_id"])
+    if len(pending_ids) != len(set(pending_ids)):
+        stopped = _replay_stop(E_RUNTIME_NOT_READY)
+        stopped["cause"] = "duplicate pending run"
+        return stopped
+    return {
+        "ok": True,
+        "keep_lock": bool(pending_ids),
+        "auto_reissue": False,
+        "publish": False,
+        "reason_code": None,
+        "durable_proven": LEDGER_DURABILITY_PROVEN,
+        "network": False,
+    }
+
+
+def crash_view(point: str) -> dict:
+    """중단 지점별 lock과 재발행 금지. 알 수 없는 지점은 예상 밖 bug다."""
+    known = {
+        "before_lock": {"keep_lock": False, "reason_code": None},
+        "lock_without_ledger": {"keep_lock": True, "reason_code": E_RUNTIME_NOT_READY},
+        "pending_not_flushed": {"keep_lock": True, "reason_code": E_RUNTIME_NOT_READY},
+        "after_remote_unknown": {"keep_lock": True, "reason_code": E_PR_RESULT_UNKNOWN},
+    }
+    found = known.get(point)
+    if found is None:
+        found = {"keep_lock": True, "reason_code": E_INTERNAL}
+    return {
+        **found,
+        "auto_reissue": False,
+        "publish": False,
+        "durable_proven": False,
+        "network": False,
+    }
+
+
+def _replay_stop(reason: str) -> dict:
+    """깨진 ledger는 잠금을 유지하고 자동 재발행하지 않는다."""
+    return {
+        "ok": False,
+        "keep_lock": True,
+        "auto_reissue": False,
+        "publish": False,
+        "reason_code": reason,
+        "durable_proven": False,
+        "network": False,
+    }
 
 
 def reconcile(existence: str) -> dict:

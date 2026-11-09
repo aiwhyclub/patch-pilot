@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 from patchpilot.core.capability import MODEL_ENDPOINT_APPROVED
-from patchpilot.schema.codes import H_MODEL_SEND_BLOCKED
+from patchpilot.schema.codes import E_RUNTIME_NOT_READY, H_MODEL_SEND_BLOCKED
 from patchpilot.schema.redact import contains_secret
 
 
@@ -45,6 +45,34 @@ class ObviousFakeModel:
             "reason_code": H_MODEL_SEND_BLOCKED,
             "excerpt_ignored": True,
         }
+
+
+def send_gate(*, consent: bool, excerpt: str | None, binding: dict | None) -> dict:
+    """provider identity가 없으면 전송하지 않는다. 엔드포인트가 없어도 diff를 만들지 않는다."""
+    if not isinstance(binding, dict) or not binding.get("provider_identity") or not binding.get("api_identity"):
+        return {
+            "network": False,
+            "sent": False,
+            "diff": None,
+            "reason_code": E_RUNTIME_NOT_READY,
+            "cause": "provider and API identity are unset",
+        }
+    if binding.get("model_send_consent") is not True or consent is not True:
+        return {
+            "network": False,
+            "sent": False,
+            "diff": None,
+            "reason_code": H_MODEL_SEND_BLOCKED,
+            "cause": "send consent is not true",
+        }
+    reason = model_send_decision(consent=consent, excerpt=excerpt)
+    return {
+        "network": False,
+        "sent": False,
+        "diff": None,
+        "reason_code": reason or E_RUNTIME_NOT_READY,
+        "cause": "model endpoint is not approved",
+    }
 
 
 def send_to_provider(excerpt: str, consent: bool) -> dict:

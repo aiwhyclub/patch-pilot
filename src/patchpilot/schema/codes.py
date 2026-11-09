@@ -60,6 +60,7 @@ E_PR_CREATE_FAILED = "E_PR_CREATE_FAILED"
 E_PR_RESULT_UNKNOWN = "E_PR_RESULT_UNKNOWN"
 E_OUTPUT_ROOT = "E_OUTPUT_ROOT"
 E_RESOURCE_LIMIT = "E_RESOURCE_LIMIT"
+E_RUNTIME_NOT_READY = "E_RUNTIME_NOT_READY"
 E_INTERNAL = "E_INTERNAL"
 
 # 계약 C14 영문 안내. 번역하거나 의미를 바꾸지 않는다.
@@ -93,6 +94,7 @@ REASON_TEXT = {
     "E_PR_RESULT_UNKNOWN": "PR state unknown. Check the repository manually before any retry.",
     "E_OUTPUT_ROOT": "Output directory unsafe or not writable; minimal diagnostics only.",
     "E_RESOURCE_LIMIT": "Resource limit exceeded.",
+    "E_RUNTIME_NOT_READY": "Runtime prerequisites are not verified. No customer tests were executed.",
     "E_INTERNAL": "Internal error. See report.",
 }
 

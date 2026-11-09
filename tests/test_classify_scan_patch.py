@@ -155,6 +155,51 @@ class ClassifyTests(unittest.TestCase):
         )
         self.assertEqual(result.reason_code, H_UNIT_OR_SEMANTIC)
 
+    def test_path_item_fields_are_not_a_supported_rename(self) -> None:
+        """path item의 parameter, summary, description, servers, x-*는 rename 지원이 아니다."""
+        pairs = {}
+        parameters = spec("temperature_2m")
+        parameters["paths"]["/v1/weather"]["parameters"] = [{"name": "q", "in": "query", "schema": {"type": "string"}}]
+        pairs["parameters"] = parameters
+        summary = spec("temperature_2m")
+        summary["paths"]["/v1/weather"]["summary"] = "changed"
+        pairs["summary"] = summary
+        description = spec("temperature_2m")
+        description["paths"]["/v1/weather"]["description"] = "changed"
+        pairs["description"] = description
+        servers = spec("temperature_2m")
+        servers["paths"]["/v1/weather"]["servers"] = [{"url": "https://example.test"}]
+        pairs["servers"] = servers
+        extension = spec("temperature_2m")
+        extension["paths"]["/v1/weather"]["x-team"] = "changed"
+        pairs["x-team"] = extension
+        for name, new_doc in pairs.items():
+            result = classify_documents(
+                spec("temperature"),
+                new_doc,
+                mapping("current_weather.temperature", "current_weather.temperature_2m"),
+            )
+            self.assertEqual(result.reason_code, H_UNSUPPORTED_KIND, name)
+            self.assertFalse(result.supported, name)
+        operation_parameters = spec("temperature_2m")
+        operation_parameters["paths"]["/v1/weather"]["get"]["parameters"] = [
+            {"name": "q", "in": "query", "schema": {"type": "string"}}
+        ]
+        inside = classify_documents(
+            spec("temperature"),
+            operation_parameters,
+            mapping("current_weather.temperature", "current_weather.temperature_2m"),
+        )
+        self.assertEqual(inside.reason_code, H_UNSUPPORTED_KIND)
+        root_servers = spec("temperature_2m")
+        root_servers["servers"] = [{"url": "https://example.test"}]
+        root = classify_documents(
+            spec("temperature"),
+            root_servers,
+            mapping("current_weather.temperature", "current_weather.temperature_2m"),
+        )
+        self.assertTrue(root.supported)
+
 
 OPERATION = ("get", "/v1/weather")
 POINTER = [["current_weather", "temperature"]]
@@ -323,6 +368,146 @@ class ScanTests(unittest.TestCase):
         self.assertTrue(result.unresolved)
         self.assertEqual(result.sites, [])
 
+    def test_scope_rebindings_of_the_response_name_are_unresolved(self) -> None:
+        """같은 범위를 묶는 comprehension, except, with, async for, import, match는 응답 변수가 아니다."""
+        samples = {
+            "comprehension": (
+                "def read_temp(rows):\n"
+                "    body = requests.get('/v1/weather').json()\n"
+                "    return [body['current_weather']['temperature'] for body in rows]\n"
+            ),
+            "except": (
+                "def read_temp():\n"
+                "    body = requests.get('/v1/weather').json()\n"
+                "    try:\n"
+                "        return 1\n"
+                "    except Exception as body:\n"
+                "        return body['current_weather']['temperature']\n"
+            ),
+            "with": (
+                "def read_temp():\n"
+                "    body = requests.get('/v1/weather').json()\n"
+                "    with ctx() as body:\n"
+                "        return body['current_weather']['temperature']\n"
+            ),
+            "async-with": (
+                "async def read_temp():\n"
+                "    body = requests.get('/v1/weather').json()\n"
+                "    async with ctx() as body:\n"
+                "        return body['current_weather']['temperature']\n"
+            ),
+            "async-for": (
+                "async def read_temp(rows):\n"
+                "    body = requests.get('/v1/weather').json()\n"
+                "    async for body in rows:\n"
+                "        return body['current_weather']['temperature']\n"
+            ),
+            "for": (
+                "def read_temp(rows):\n"
+                "    body = requests.get('/v1/weather').json()\n"
+                "    for body in rows:\n"
+                "        return body['current_weather']['temperature']\n"
+            ),
+            "import": (
+                "def read_temp():\n"
+                "    body = requests.get('/v1/weather').json()\n"
+                "    import json as body\n"
+                "    return body['current_weather']['temperature']\n"
+            ),
+            "match": (
+                "def read_temp(item):\n"
+                "    body = requests.get('/v1/weather').json()\n"
+                "    match item:\n"
+                "        case body:\n"
+                "            return body['current_weather']['temperature']\n"
+            ),
+        }
+        for name, source in samples.items():
+            result = _scan(source)
+            self.assertTrue(result.unresolved, name)
+            self.assertEqual(result.sites, [], name)
+
+    def test_other_scope_names_do_not_reject_the_response_variable(self) -> None:
+        """다른 반복 이름, 다른 except, 다른 match capture는 응답 변수를 묶지 않는다."""
+        samples = (
+            "def read_temp(rows):\n"
+            "    body = requests.get('/v1/weather').json()\n"
+            "    return [body['current_weather']['temperature'] for row in rows]\n",
+            "def read_temp():\n"
+            "    body = requests.get('/v1/weather').json()\n"
+            "    try:\n"
+            "        return body['current_weather']['temperature']\n"
+            "    except Exception as other:\n"
+            "        return other\n",
+            "def read_temp(item):\n"
+            "    body = requests.get('/v1/weather').json()\n"
+            "    match item:\n"
+            "        case other:\n"
+            "            return body['current_weather']['temperature']\n",
+        )
+        for source in samples:
+            result = _scan(source)
+            self.assertFalse(result.unresolved)
+            self.assertEqual(result.sites[0].base, "body")
+
+    def test_object_alias_mixed_with_direct_access_is_unresolved(self) -> None:
+        """응답 객체를 속성이나 컨테이너에 넣으면 직접 사이트와 함께 있어도 보류한다."""
+        holder = (
+            "def read_temp():\n"
+            "    body = requests.get('/v1/weather').json()\n"
+            "    holder.payload = body\n"
+            "    a = body['current_weather']['temperature']\n"
+            "    b = holder.payload['current_weather']['temperature']\n"
+            "    return a\n"
+        )
+        box = (
+            "def read_temp():\n"
+            "    body = requests.get('/v1/weather').json()\n"
+            "    box['payload'] = body\n"
+            "    a = body['current_weather']['temperature']\n"
+            "    b = box['payload']['current_weather']['temperature']\n"
+            "    return a\n"
+        )
+        self.assertTrue(_scan(holder).unresolved)
+        self.assertEqual(_scan(holder).sites, [])
+        self.assertTrue(_scan(box).unresolved)
+        self.assertEqual(_scan(box).sites, [])
+
+    def test_path_literal_outside_the_url_slot_is_unresolved(self) -> None:
+        """path 문자열이 URL 칸이 아니면 승인 operation 호출이 아니다."""
+        helper = (
+            "def read_temp():\n"
+            "    body = helper('GET', '/tmp/other', note='/v1/weather').json()\n"
+            "    return body['current_weather']['temperature']\n"
+        )
+        noted = (
+            "def read_temp():\n"
+            "    body = requests.get('/tmp/other', note='/v1/weather').json()\n"
+            "    return body['current_weather']['temperature']\n"
+        )
+        self.assertTrue(_scan(helper).unresolved)
+        self.assertEqual(_scan(helper).sites, [])
+        self.assertTrue(_scan(noted).unresolved)
+        keyword = (
+            "def read_temp():\n"
+            "    body = requests.get(url='/v1/weather').json()\n"
+            "    return body['current_weather']['temperature']\n"
+        )
+        request_keyword = (
+            "def read_temp():\n"
+            "    body = client.request(method='GET', url='/v1/weather').json()\n"
+            "    return body['current_weather']['temperature']\n"
+        )
+        cache_get = (
+            "def read_temp():\n"
+            "    body = cache.get('/v1/weather').json()\n"
+            "    return body['current_weather']['temperature']\n"
+        )
+        for source in (keyword, request_keyword, cache_get):
+            result = _scan(source)
+            self.assertFalse(result.unresolved)
+            self.assertEqual(result.sites[0].binding, "direct_json_response")
+
 
 class PatchTests(unittest.TestCase):
     def test_last_key_diff_is_accepted(self) -> None:
@@ -395,6 +580,46 @@ class PatchTests(unittest.TestCase):
             " def read_temp(payload):\n"
             '-    return payload["current_weather"]["temperature"]\n'
             '+    return payload["current_weather"]["temperature_2m"] + 1\n'
+        )
+        renames = [{"path": "client.py", "old_keys": ["current_weather", "temperature"], "new_key": "temperature_2m"}]
+        self.assertEqual(validate_patch({"client.py": old}, diff, renames), H_PATCH_REJECTED)
+
+    def test_protected_aliases_are_rejected_without_blocking_ordinary_names(self) -> None:
+        """test.py, Tests/, fixture.py는 거부하고 client.py와 contest.py는 그대로 둔다."""
+        old = 'def read_temp(payload):\n    return payload["current_weather"]["temperature"]\n'
+        renames_for = lambda path: [{"path": path, "old_keys": ["current_weather", "temperature"], "new_key": "temperature_2m"}]
+        rejected = ("test.py", "tests.py", "Tests/client.py", "fixture.py", "fixtures.py", "TEST.PY")
+        allowed = ("client.py", "contest.py", "latest.py")
+        for path in rejected:
+            diff = (
+                f"--- a/{path}\n+++ b/{path}\n@@ -1,2 +1,2 @@\n"
+                " def read_temp(payload):\n"
+                '-    return payload["current_weather"]["temperature"]\n'
+                '+    return payload["current_weather"]["temperature_2m"]\n'
+            )
+            self.assertEqual(validate_patch({path: old}, diff, renames_for(path)), H_PATCH_REJECTED, path)
+        for path in allowed:
+            diff = (
+                f"--- a/{path}\n+++ b/{path}\n@@ -1,2 +1,2 @@\n"
+                " def read_temp(payload):\n"
+                '-    return payload["current_weather"]["temperature"]\n'
+                '+    return payload["current_weather"]["temperature_2m"]\n'
+            )
+            self.assertIsNone(validate_patch({path: old}, diff, renames_for(path)), path)
+
+    def test_unquoted_secret_assignment_rejects_the_diff(self) -> None:
+        """따옴표 없는 password 대입이 문맥에 있으면 키 변경 diff를 통과시키지 않는다."""
+        old = (
+            "password=supersecretvalue\n"
+            "def read_temp(payload):\n"
+            '    return payload["current_weather"]["temperature"]\n'
+        )
+        diff = (
+            "--- a/client.py\n+++ b/client.py\n@@ -1,3 +1,3 @@\n"
+            " password=supersecretvalue\n"
+            " def read_temp(payload):\n"
+            '-    return payload["current_weather"]["temperature"]\n'
+            '+    return payload["current_weather"]["temperature_2m"]\n'
         )
         renames = [{"path": "client.py", "old_keys": ["current_weather", "temperature"], "new_key": "temperature_2m"}]
         self.assertEqual(validate_patch({"client.py": old}, diff, renames), H_PATCH_REJECTED)

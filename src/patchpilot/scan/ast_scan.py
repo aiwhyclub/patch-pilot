@@ -117,30 +117,60 @@ def _path_equal(value: str, expected: str) -> bool:
     return path == expected
 
 
-def _literal_strings(call: ast.Call) -> list[str] | None:
-    """호출 인자가 모두 상수일 때만 문자열 목록을 돌려준다. 변수 URL은 고정이 아니다."""
+def _string_constants(call: ast.Call) -> dict | None:
+    """인자가 모두 상수일 때만 키워드 문자열과 상수 목록을 돌려준다."""
     if any(item.arg is None for item in call.keywords):
         return None
     values = list(call.args) + [item.value for item in call.keywords]
-    strings = []
-    for value in values:
-        if not isinstance(value, ast.Constant):
-            return None
-        if isinstance(value.value, str):
-            strings.append(value.value)
-    return strings
+    if any(not isinstance(value, ast.Constant) for value in values):
+        return None
+    keywords = {item.arg: item.value.value for item in call.keywords if isinstance(item.value.value, str)}
+    return {"keywords": keywords, "values": values}
 
 
 def _is_fixed_call(expr: ast.AST, method: str, path: str) -> bool:
-    """승인 method와 path가 리터럴로만 적힌 호출이면 True다."""
+    """method는 호출 속성 또는 request의 method 칸, path는 URL 칸만 본다.
+
+    note= 같은 다른 키워드에 path가 있어도 그 호출의 대상이 아니다.
+    path와 같은 문자열이 둘 이상이면 대상을 하나로 정하지 않는다.
+    계약이 callee 라이브러리를 정하지 않으므로 속성 이름이 method인 기존 모양은 유지한다.
+    """
     if not isinstance(expr, ast.Call):
         return False
-    strings = _literal_strings(expr)
-    if strings is None or not any(_path_equal(item, path) for item in strings):
+    parsed = _string_constants(expr)
+    if parsed is None:
         return False
-    if any(item.lower() == method for item in strings):
-        return True
-    return isinstance(expr.func, ast.Attribute) and expr.func.attr.lower() == method
+    path_hits = [
+        value.value
+        for value in parsed["values"]
+        if isinstance(value.value, str) and _path_equal(value.value, path)
+    ]
+    if len(path_hits) != 1:
+        return False
+    keywords = parsed["keywords"]
+    attr = expr.func.attr.lower() if isinstance(expr.func, ast.Attribute) else None
+    if attr in _HTTP_METHODS:
+        if attr != method or keywords.get("method", method).lower() != method:
+            return False
+        if expr.args and isinstance(expr.args[0].value, str):
+            url = expr.args[0].value
+        else:
+            url = keywords.get("url")
+        return isinstance(url, str) and _path_equal(url, path)
+    if attr == "request":
+        method_token = keywords.get("method")
+        if method_token is None and expr.args and isinstance(expr.args[0].value, str):
+            method_token = expr.args[0].value
+        if not isinstance(method_token, str) or method_token.lower() != method:
+            return False
+        if "url" in keywords:
+            url = keywords["url"]
+        elif len(expr.args) >= 2 and isinstance(expr.args[1].value, str):
+            url = expr.args[1].value
+        else:
+            return False
+        return _path_equal(url, path)
+    return False
 
 
 def _is_direct_json(expr: ast.AST, fixed_names: set[str], method: str, path: str) -> bool:
@@ -165,6 +195,38 @@ def _simple_assign(node: ast.AST):
     return None
 
 
+def _store_names(target: ast.AST) -> set[str]:
+    """대입 대상 중 Store인 이름만 모은다. 대상 안의 Load는 바인딩이 아니다."""
+    names = set()
+    for inner in ast.walk(target):
+        if isinstance(inner, ast.Name) and isinstance(inner.ctx, ast.Store):
+            names.add(inner.id)
+    return names
+
+
+def _pattern_bindings(pattern: ast.AST | None) -> set[str]:
+    """match 패턴이 이 범위에 실제로 묶는 이름만 모은다."""
+    names = set()
+    if isinstance(pattern, ast.MatchAs):
+        if pattern.name:
+            names.add(pattern.name)
+        names.update(_pattern_bindings(pattern.pattern))
+    elif isinstance(pattern, ast.MatchStar) and pattern.name:
+        names.add(pattern.name)
+    elif isinstance(pattern, ast.MatchMapping):
+        for sub in pattern.patterns:
+            names.update(_pattern_bindings(sub))
+        if pattern.rest:
+            names.add(pattern.rest)
+    elif isinstance(pattern, (ast.MatchSequence, ast.MatchOr)):
+        for sub in pattern.patterns:
+            names.update(_pattern_bindings(sub))
+    elif isinstance(pattern, ast.MatchClass):
+        for sub in list(pattern.patterns) + list(pattern.kwd_patterns):
+            names.update(_pattern_bindings(sub))
+    return names
+
+
 def _unstable_names(node: ast.AST) -> set[str]:
     """한 번 대입이 아닌 바인딩 이름을 모아 재대입으로 취급한다."""
     names = set()
@@ -173,19 +235,51 @@ def _unstable_names(node: ast.AST) -> set[str]:
         targets.extend(node.targets)
     elif isinstance(node, ast.AnnAssign) and node.value is None:
         targets.append(node.target)
-    elif isinstance(node, (ast.AugAssign, ast.NamedExpr, ast.For)):
+    elif isinstance(node, (ast.AugAssign, ast.NamedExpr, ast.For, ast.AsyncFor)):
         targets.append(node.target)
+    elif isinstance(node, (ast.With, ast.AsyncWith)):
+        for item in node.items:
+            if item.optional_vars is not None:
+                targets.append(item.optional_vars)
     elif isinstance(node, (ast.Global, ast.Nonlocal)):
         names.update(node.names)
     elif isinstance(node, ast.Delete):
         targets.extend(node.targets)
+    elif isinstance(node, ast.ExceptHandler) and node.name:
+        names.add(node.name)
+    elif isinstance(node, (ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp)):
+        for generator in node.generators:
+            names.update(_store_names(generator.target))
+    elif isinstance(node, ast.Import):
+        for alias in node.names:
+            names.add(alias.asname or alias.name.split(".")[0])
+    elif isinstance(node, ast.ImportFrom):
+        for alias in node.names:
+            if alias.name == "*":
+                names.add("*")
+            else:
+                names.add(alias.asname or alias.name)
+    elif isinstance(node, ast.Match):
+        for case in node.cases:
+            names.update(_pattern_bindings(case.pattern))
     for target in targets:
-        if isinstance(target, ast.Name):
-            names.add(target.id)
-        for inner in ast.walk(target):
-            if isinstance(inner, ast.Name):
-                names.add(inner.id)
+        names.update(_store_names(target))
     return names
+
+
+def _chain_root(node: ast.AST):
+    """상수 키 체인의 맨 앞 Name 노드를 돌려준다. 없으면 None이다."""
+    current = node
+    while True:
+        if isinstance(current, ast.Subscript):
+            current = current.value
+            continue
+        if isinstance(current, ast.Call) and isinstance(current.func, ast.Attribute) and current.func.attr == "get":
+            current = current.func.value
+            continue
+        if isinstance(current, ast.Name):
+            return current
+        return None
 
 
 def _root_name(node: ast.AST) -> str | None:
@@ -276,6 +370,9 @@ def _walk(nodes: list[ast.AST], params: set[str], sites: list[Site], problems: l
         if pair is not None:
             simple.setdefault(pair[0], []).append(pair[1])
         unstable.update(_unstable_names(node))
+    if "*" in unstable:
+        problems.append("alias")
+        unstable.discard("*")
     fixed_names = set()
     for name, exprs in simple.items():
         if name in unstable or len(exprs) != 1:
@@ -290,6 +387,21 @@ def _walk(nodes: list[ast.AST], params: set[str], sites: list[Site], problems: l
             response_vars.add(name)
     for name, exprs in simple.items():
         if len(exprs) == 1 and isinstance(exprs[0], ast.Name) and exprs[0].id in response_vars:
+            problems.append("alias")
+    chain_roots = set()
+    for node in local:
+        if as_chain(node) is None:
+            continue
+        root = _chain_root(node)
+        if root is not None:
+            chain_roots.add(id(root))
+    for node in local:
+        if (
+            isinstance(node, ast.Name)
+            and isinstance(node.ctx, ast.Load)
+            and node.id in response_vars
+            and id(node) not in chain_roots
+        ):
             problems.append("alias")
     for node in local:
         if _dynamic_on(node, response_vars):
