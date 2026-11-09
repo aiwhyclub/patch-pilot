@@ -178,8 +178,15 @@ def execute(config: RunConfig, stdout=None, stderr=None) -> int:
         _mark(manifest, "scan", "passed", H_UNRESOLVED)
         log("static scan could not cover the allowlist inside its limits")
         return finish("hold", H_UNRESOLVED)
-    pointers = [item.old_pointer.split(".") for item in classified.changes if item.supported]
-    scanned = scan_files(files, pointers)
+    supported = [item for item in classified.changes if item.supported]
+    operations = {(item.operation.get("method"), item.operation.get("path")) for item in supported}
+    if len(operations) != 1:
+        scan_body = {"status": "unresolved", "sites": []}
+        _mark(manifest, "scan", "passed", H_UNRESOLVED)
+        log("static scan needs one approved operation")
+        return finish("hold", H_UNRESOLVED)
+    pointers = [item.old_pointer.split(".") for item in supported]
+    scanned = scan_files(files, pointers, next(iter(operations)))
     scan_body = {
         "status": "unresolved" if scanned.unresolved else "sites_found",
         "sites": [site.as_dict() for site in scanned.sites],
@@ -191,10 +198,13 @@ def execute(config: RunConfig, stdout=None, stderr=None) -> int:
 
     block = execution_block_reason()
     _mark(manifest, "test_baseline_v1", "blocked", E_INTERNAL)
+    # C14에 런타임 미검증 전용 코드가 없다. E_INTERNAL은 그 공백의 기존 error이고
+    # E_BASELINE_FAIL이나 pr_gate_blocked가 아니다. 테스트 결과는 not_run으로 둔다.
     log(
-        "test_baseline_v1 BLOCKED: one-shot unprivileged container, cgroup limits, "
-        "and trusted supervisor enforcement are not proven. No customer process was started. "
-        f"guard={block}. tests remain not_run."
+        "test_baseline_v1 status=blocked reason=E_INTERNAL. "
+        "This is not E_BASELINE_FAIL. baseline_v1 result stays not_run. "
+        "pr_gate_blocked is not used. No customer process was started. "
+        f"guard={block}."
     )
     return finish("error", E_INTERNAL)
 

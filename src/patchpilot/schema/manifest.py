@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+from patchpilot.core.base_sha import acquisition_problems
 from patchpilot.schema.codes import (
     BLOCK_CODES,
     DATA_NOTICE,
@@ -190,4 +191,5 @@ def validate_manifest(manifest: dict) -> list[str]:
             errors.append(name)
     if "Validated on" in manifest["data_notice"]:
         errors.append("validated wording")
+    errors.extend(acquisition_problems(manifest))
     return errors

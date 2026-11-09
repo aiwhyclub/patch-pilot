@@ -49,10 +49,11 @@ def render_report(manifest: dict) -> str:
     ]
     for stage in manifest.get("stages") or []:
         lines.append(
-            "- {name}: status={status} attempts={attempts}".format(
+            "- {name}: status={status} attempts={attempts} reason={reason}".format(
                 name=escape_text(stage.get("name")),
                 status=escape_text(stage.get("status")),
                 attempts=escape_text(stage.get("attempts")),
+                reason=escape_text(stage.get("reason_code")),
             )
         )
     lines.extend(["", "## Tests"])

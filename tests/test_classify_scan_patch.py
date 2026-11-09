@@ -156,32 +156,172 @@ class ClassifyTests(unittest.TestCase):
         self.assertEqual(result.reason_code, H_UNIT_OR_SEMANTIC)
 
 
-class ScanTests(unittest.TestCase):
-    def test_direct_parameter_chain_is_a_site(self) -> None:
-        """파라미터에서 바로 이어진 문자열 키 체인만 사이트로 남긴다."""
-        source = 'def read_temp(payload):\n    return payload["current_weather"]["temperature"]\n'
-        result = scan_source("client.py", source, [["current_weather", "temperature"]])
-        self.assertFalse(result.unresolved)
-        self.assertEqual(result.sites[0].base, "payload")
-        self.assertEqual(result.sites[0].keys, ["current_weather", "temperature"])
+OPERATION = ("get", "/v1/weather")
+POINTER = [["current_weather", "temperature"]]
 
-    def test_get_chain_is_a_site(self) -> None:
-        """문자열 인자 하나인 .get 체인도 직접 접근으로 본다."""
-        source = 'def read_temp(payload):\n    return payload.get("current_weather").get("temperature")\n'
-        result = scan_source("client.py", source, [["current_weather", "temperature"]])
+
+def _scan(source: str):
+    """승인된 GET /v1/weather 기준으로 한 소스를 탐색한다."""
+    return scan_source("client.py", source, POINTER, OPERATION)
+
+
+class ScanTests(unittest.TestCase):
+    def test_direct_json_assignment_of_fixed_operation_is_supported(self) -> None:
+        """고정 GET의 .json()을 한 번 대입한 변수의 문자열 키만 사이트다."""
+        source = (
+            "def read_temp():\n"
+            "    body = requests.get(\"https://example.test/v1/weather\").json()\n"
+            "    return body[\"current_weather\"][\"temperature\"]\n"
+        )
+        result = _scan(source)
+        self.assertFalse(result.unresolved)
+        self.assertEqual(result.sites[0].base, "body")
+        self.assertEqual(result.sites[0].keys, ["current_weather", "temperature"])
+        self.assertEqual(result.sites[0].binding, "direct_json_response")
+
+    def test_two_step_json_call_on_fixed_operation_is_supported(self) -> None:
+        """고정 호출을 담은 이름에 바로 붙인 .json() 대입도 응답 변수다."""
+        source = (
+            "def read_temp():\n"
+            "    response = requests.get(\"/v1/weather\")\n"
+            "    body = response.json()\n"
+            "    return body[\"current_weather\"][\"temperature\"]\n"
+        )
+        result = _scan(source)
+        self.assertFalse(result.unresolved)
+        self.assertEqual(result.sites[0].base, "body")
+
+    def test_request_method_and_path_literals_are_supported(self) -> None:
+        """method와 path가 모두 문자열 리터럴인 request 호출의 JSON 대입을 인정한다."""
+        source = (
+            "def read_temp():\n"
+            "    body = client.request(\"GET\", \"/v1/weather\").json()\n"
+            "    return body.get(\"current_weather\").get(\"temperature\")\n"
+        )
+        result = _scan(source)
         self.assertFalse(result.unresolved)
         self.assertEqual(len(result.sites), 1)
 
-    def test_alias_dynamic_and_reassignment_are_unresolved(self) -> None:
-        """별칭, 동적 키, 파라미터 재대입은 사이트를 만들지 않는다."""
-        alias = 'def read_temp(payload):\n    data = payload\n    return data["current_weather"]["temperature"]\n'
-        dynamic = 'def read_temp(payload, key):\n    return payload["current_weather"][key]\n'
-        again = 'def read_temp(payload):\n    payload = payload\n    return payload["current_weather"]["temperature"]\n'
-        pointers = [["current_weather", "temperature"]]
-        self.assertTrue(scan_source("a.py", alias, pointers).unresolved)
-        self.assertTrue(scan_source("b.py", dynamic, pointers).unresolved)
-        self.assertTrue(scan_source("c.py", again, pointers).unresolved)
-        self.assertEqual(scan_source("a.py", alias, pointers).sites, [])
+    def test_module_level_direct_json_assignment_is_supported(self) -> None:
+        """함수 밖이어도 직접 JSON 대입이면 파라미터 규칙으로 버리지 않는다."""
+        source = (
+            "body = requests.get(\"/v1/weather\").json()\n"
+            "TEMP = body[\"current_weather\"][\"temperature\"]\n"
+        )
+        result = _scan(source)
+        self.assertFalse(result.unresolved)
+        self.assertEqual(result.sites[0].base, "body")
+
+    def test_unrelated_dynamic_index_does_not_reject_direct_binding(self) -> None:
+        """응답 변수가 아닌 다른 시퀀스 첨자는 정상 바인딩을 보류로 만들지 않는다."""
+        source = (
+            "def read_temp(rows, index):\n"
+            "    body = requests.get(\"/v1/weather\").json()\n"
+            "    item = rows[index]\n"
+            "    return body[\"current_weather\"][\"temperature\"]\n"
+        )
+        result = _scan(source)
+        self.assertFalse(result.unresolved)
+        self.assertEqual(result.sites[0].base, "body")
+
+    def test_other_api_same_key_is_unresolved(self) -> None:
+        """같은 키라도 다른 path의 JSON이면 승인 응답 변수가 아니다."""
+        source = (
+            "def read_temp():\n"
+            "    body = requests.get(\"/v1/forecast\").json()\n"
+            "    return body[\"current_weather\"][\"temperature\"]\n"
+        )
+        result = _scan(source)
+        self.assertTrue(result.unresolved)
+        self.assertEqual(result.sites, [])
+
+    def test_other_method_same_path_is_unresolved(self) -> None:
+        """같은 path라도 method가 다르면 승인 operation이 아니다."""
+        source = (
+            "def read_temp():\n"
+            "    body = requests.post(\"/v1/weather\").json()\n"
+            "    return body[\"current_weather\"][\"temperature\"]\n"
+        )
+        result = _scan(source)
+        self.assertTrue(result.unresolved)
+        self.assertEqual(result.sites, [])
+
+    def test_arbitrary_parameter_is_unresolved(self) -> None:
+        """함수 파라미터의 []/.get은 응답 변수로 과신하지 않는다."""
+        source = "def read_temp(payload):\n    return payload[\"current_weather\"][\"temperature\"]\n"
+        get_chain = "def read_temp(payload):\n    return payload.get(\"current_weather\").get(\"temperature\")\n"
+        self.assertTrue(_scan(source).unresolved)
+        self.assertEqual(_scan(source).sites, [])
+        self.assertTrue(_scan(get_chain).unresolved)
+
+    def test_alias_of_response_variable_is_unresolved(self) -> None:
+        """응답 변수를 다른 이름에 옮기면 직접 접근이 아니다."""
+        source = (
+            "def read_temp():\n"
+            "    body = requests.get(\"/v1/weather\").json()\n"
+            "    data = body\n"
+            "    return data[\"current_weather\"][\"temperature\"]\n"
+        )
+        result = _scan(source)
+        self.assertTrue(result.unresolved)
+        self.assertEqual(result.sites, [])
+
+    def test_reassignment_of_response_variable_is_unresolved(self) -> None:
+        """응답 변수를 다시 대입하면 그 이름을 사이트로 쓰지 않는다."""
+        source = (
+            "def read_temp():\n"
+            "    body = requests.get(\"/v1/weather\").json()\n"
+            "    body = body\n"
+            "    return body[\"current_weather\"][\"temperature\"]\n"
+        )
+        result = _scan(source)
+        self.assertTrue(result.unresolved)
+        self.assertEqual(result.sites, [])
+
+    def test_dynamic_key_on_response_variable_is_unresolved(self) -> None:
+        """응답 변수의 동적 키는 정적 포인터로 풀지 않는다."""
+        source = (
+            "def read_temp(key):\n"
+            "    body = requests.get(\"/v1/weather\").json()\n"
+            "    return body[\"current_weather\"][key]\n"
+        )
+        result = _scan(source)
+        self.assertTrue(result.unresolved)
+        self.assertEqual(result.sites, [])
+
+    def test_variable_url_is_unresolved(self) -> None:
+        """URL이 이름이거나 이어 붙인 값이면 고정 API 호출이 아니다."""
+        source = (
+            "def read_temp(url):\n"
+            "    body = requests.get(url).json()\n"
+            "    return body[\"current_weather\"][\"temperature\"]\n"
+        )
+        result = _scan(source)
+        self.assertTrue(result.unresolved)
+        self.assertEqual(result.sites, [])
+
+    def test_inline_json_call_without_assignment_is_unresolved(self) -> None:
+        """변수에 직접 대입하지 않은 .json() 체인은 응답 변수가 아니다."""
+        source = (
+            "def read_temp():\n"
+            "    return requests.get(\"/v1/weather\").json()[\"current_weather\"][\"temperature\"]\n"
+        )
+        result = _scan(source)
+        self.assertTrue(result.unresolved)
+        self.assertEqual(result.sites, [])
+
+    def test_mixed_direct_and_parameter_is_unresolved(self) -> None:
+        """직접 대입이 있어도 같은 키의 파라미터 접근이 있으면 일부만 인정하지 않는다."""
+        source = (
+            "def read_temp(payload):\n"
+            "    body = requests.get(\"/v1/weather\").json()\n"
+            "    left = body[\"current_weather\"][\"temperature\"]\n"
+            "    right = payload[\"current_weather\"][\"temperature\"]\n"
+            "    return left\n"
+        )
+        result = _scan(source)
+        self.assertTrue(result.unresolved)
+        self.assertEqual(result.sites, [])
 
 
 class PatchTests(unittest.TestCase):
@@ -246,6 +386,18 @@ class PatchTests(unittest.TestCase):
         )
         renames = [{"path": "test_client.py", "old_keys": ["current_weather", "temperature"], "new_key": "temperature_2m"}]
         self.assertEqual(validate_patch({"test_client.py": old}, diff, renames), H_PATCH_REJECTED)
+
+    def test_arithmetic_injection_is_rejected(self) -> None:
+        """마지막 키 옆에 산술을 넣으면 AST equality가 거절한다."""
+        old = 'def read_temp(payload):\n    return payload["current_weather"]["temperature"]\n'
+        diff = (
+            "--- a/client.py\n+++ b/client.py\n@@ -1,2 +1,2 @@\n"
+            " def read_temp(payload):\n"
+            '-    return payload["current_weather"]["temperature"]\n'
+            '+    return payload["current_weather"]["temperature_2m"] + 1\n'
+        )
+        renames = [{"path": "client.py", "old_keys": ["current_weather", "temperature"], "new_key": "temperature_2m"}]
+        self.assertEqual(validate_patch({"client.py": old}, diff, renames), H_PATCH_REJECTED)
 
 
 if __name__ == "__main__":

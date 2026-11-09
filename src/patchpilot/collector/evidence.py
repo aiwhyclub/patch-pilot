@@ -29,6 +29,18 @@ def file_record(path: Path, stage: str, run_id: str) -> dict:
     return {"path": path.as_posix(), "sha256": hash_file(path), "stage": stage, "run_id": run_id}
 
 
+# 고객 테스트 세 단계의 collector 기록. 이 이름이 없다고 baseline이 끝난 것이 아니다.
+BASELINE_STAGES = ("test_baseline_v1", "test_unpatched_v2", "test_patched_v2")
+
+
+def baseline_stages_recorded(records: list[dict]) -> bool:
+    """세 테스트 단계가 index에 모두 있을 때만 True다. 없으면 사전 baseline이 아니다."""
+    if not isinstance(records, list) or not records:
+        return False
+    stages = {record.get("stage") for record in records if isinstance(record, dict)}
+    return set(BASELINE_STAGES).issubset(stages)
+
+
 def rehash_matches(records: list[dict]) -> bool:
     """기록된 hash와 현재 파일 hash가 모두 같으면 True를 돌려준다."""
     if not isinstance(records, list):

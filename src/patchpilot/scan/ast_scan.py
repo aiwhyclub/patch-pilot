@@ -1,6 +1,12 @@
 # 난이도: Difficult
 # 학습 키워드: AST, Static Analysis, Subscript, Name Binding
-"""응답 변수 파라미터의 직접 문자열 키 체인만 찾고, 별칭과 동적 키는 보류한다."""
+"""승인 operation의 JSON 응답 변수에 직접 붙은 문자열 키만 찾는다.
+
+C2a의 응답 객체 변수는 함수 파라미터가 아니다. 이 모듈이 사이트로 인정하는
+변수는 범위 안에서 한 번만 대입되고, 그 값이 승인된 method/path의 고정 호출에
+대한 인자 없는 .json() 호출인 이름이다. 별칭, 재대입, 동적 키, 다른 operation,
+임의 파라미터는 사이트로 세지 않고 H_UNRESOLVED로 올린다.
+"""
 
 from __future__ import annotations
 
@@ -8,18 +14,29 @@ import ast
 from dataclasses import dataclass, field
 
 
+_HTTP_METHODS = {"get", "post", "put", "patch", "delete", "head", "options", "trace"}
+_META_NAMES = {"eval", "exec", "getattr", "setattr"}
+
+
 @dataclass
 class Site:
-    """직접 바인딩으로 확인된 키 접근 한 곳이다."""
+    """직접 JSON 응답 변수에서 확인된 키 접근 한 곳이다."""
 
     path: str
     line: int
     base: str
     keys: list[str]
+    binding: str = "direct_json_response"
 
     def as_dict(self) -> dict:
         """scan report에 넣을 위치 정보만 만든다. 소스 본문은 넣지 않는다."""
-        return {"path": self.path, "line": self.line, "base": self.base, "keys": list(self.keys)}
+        return {
+            "path": self.path,
+            "line": self.line,
+            "base": self.base,
+            "keys": list(self.keys),
+            "binding": self.binding,
+        }
 
 
 @dataclass
@@ -63,40 +80,6 @@ def as_chain(node):
     return current.id, keys, last_const
 
 
-def _assigned_names(fn: ast.AST) -> set[str]:
-    """함수 안에서 다시 대입되는 이름을 모아 파라미터 재대입을 찾는다."""
-    assigned = set()
-    for node in _local_nodes(fn):
-        targets = []
-        if isinstance(node, ast.Assign):
-            targets.extend(node.targets)
-        elif isinstance(node, ast.AnnAssign):
-            targets.append(node.target)
-        elif isinstance(node, ast.AugAssign):
-            targets.append(node.target)
-        elif isinstance(node, ast.NamedExpr):
-            targets.append(node.target)
-        elif isinstance(node, ast.For):
-            targets.append(node.target)
-        for target in targets:
-            if isinstance(target, ast.Name):
-                assigned.add(target.id)
-        if isinstance(node, (ast.Global, ast.Nonlocal)):
-            assigned.update(node.names)
-    return assigned
-
-
-def _local_nodes(fn: ast.AST):
-    """중첩 함수 본문을 제외한 이 함수의 노드만 순서대로 돌려준다."""
-    nested = set()
-    for node in ast.walk(fn):
-        if node is not fn and isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
-            nested.update(ast.walk(node))
-    for node in ast.walk(fn):
-        if node is not fn and node not in nested:
-            yield node
-
-
 def _parameters(fn: ast.AST) -> set[str]:
     """함수와 lambda의 직접 파라미터 이름을 돌려준다."""
     args = fn.args
@@ -108,75 +91,247 @@ def _parameters(fn: ast.AST) -> set[str]:
     return set(names)
 
 
-def _dynamic_access(fn: ast.AST) -> bool:
-    """상수 문자열이 아닌 첨자나 .get이 있으면 True를 돌려준다."""
-    for node in _local_nodes(fn):
-        if isinstance(node, ast.Subscript) and not (
+def _operation_ok(operation) -> bool:
+    """분류기가 넘긴 (method, path) 한 쌍만 승인 operation으로 받는다."""
+    if not isinstance(operation, tuple) or len(operation) != 2:
+        return False
+    method, path = operation
+    if method not in _HTTP_METHODS or not isinstance(path, str):
+        return False
+    if not path.startswith("/") or ".." in path.split("/"):
+        return False
+    return True
+
+
+def _path_equal(value: str, expected: str) -> bool:
+    """문자열 인자가 operation path 자체이거나 그 path만 가진 http(s) URL인지 본다."""
+    if value == expected:
+        return True
+    if not value.startswith(("http://", "https://")):
+        return False
+    rest = value.split("://", 1)[1]
+    slash = rest.find("/")
+    if slash < 0:
+        return False
+    path = rest[slash:].split("?", 1)[0].split("#", 1)[0]
+    return path == expected
+
+
+def _literal_strings(call: ast.Call) -> list[str] | None:
+    """호출 인자가 모두 상수일 때만 문자열 목록을 돌려준다. 변수 URL은 고정이 아니다."""
+    if any(item.arg is None for item in call.keywords):
+        return None
+    values = list(call.args) + [item.value for item in call.keywords]
+    strings = []
+    for value in values:
+        if not isinstance(value, ast.Constant):
+            return None
+        if isinstance(value.value, str):
+            strings.append(value.value)
+    return strings
+
+
+def _is_fixed_call(expr: ast.AST, method: str, path: str) -> bool:
+    """승인 method와 path가 리터럴로만 적힌 호출이면 True다."""
+    if not isinstance(expr, ast.Call):
+        return False
+    strings = _literal_strings(expr)
+    if strings is None or not any(_path_equal(item, path) for item in strings):
+        return False
+    if any(item.lower() == method for item in strings):
+        return True
+    return isinstance(expr.func, ast.Attribute) and expr.func.attr.lower() == method
+
+
+def _is_direct_json(expr: ast.AST, fixed_names: set[str], method: str, path: str) -> bool:
+    """인자 없는 .json()이 고정 호출이거나 그 호출을 담은 이름에 바로 붙으면 True다."""
+    if not isinstance(expr, ast.Call) or expr.args or expr.keywords:
+        return False
+    func = expr.func
+    if not isinstance(func, ast.Attribute) or func.attr != "json":
+        return False
+    receiver = func.value
+    if _is_fixed_call(receiver, method, path):
+        return True
+    return isinstance(receiver, ast.Name) and receiver.id in fixed_names
+
+
+def _simple_assign(node: ast.AST):
+    """이름 하나 = 값 하나인 대입만 (이름, 값)으로 돌려주고 아니면 None이다."""
+    if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+        return node.targets[0].id, node.value
+    if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.value is not None:
+        return node.target.id, node.value
+    return None
+
+
+def _unstable_names(node: ast.AST) -> set[str]:
+    """한 번 대입이 아닌 바인딩 이름을 모아 재대입으로 취급한다."""
+    names = set()
+    targets = []
+    if isinstance(node, ast.Assign) and not (len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)):
+        targets.extend(node.targets)
+    elif isinstance(node, ast.AnnAssign) and node.value is None:
+        targets.append(node.target)
+    elif isinstance(node, (ast.AugAssign, ast.NamedExpr, ast.For)):
+        targets.append(node.target)
+    elif isinstance(node, (ast.Global, ast.Nonlocal)):
+        names.update(node.names)
+    elif isinstance(node, ast.Delete):
+        targets.extend(node.targets)
+    for target in targets:
+        if isinstance(target, ast.Name):
+            names.add(target.id)
+        for inner in ast.walk(target):
+            if isinstance(inner, ast.Name):
+                names.add(inner.id)
+    return names
+
+
+def _root_name(node: ast.AST) -> str | None:
+    """첨자와 .get을 걷어 낸 맨 앞 이름이 있으면 돌려준다."""
+    current = node
+    while True:
+        if isinstance(current, ast.Subscript):
+            current = current.value
+            continue
+        if isinstance(current, ast.Call) and isinstance(current.func, ast.Attribute) and current.func.attr == "get":
+            current = current.func.value
+            continue
+        if isinstance(current, ast.Name):
+            return current.id
+        return None
+
+
+def _dynamic_on(node: ast.AST, names: set[str]) -> bool:
+    """응답 변수에서 상수 문자열이 아닌 첨자나 .get이 나오면 True다."""
+    if isinstance(node, ast.Subscript):
+        if _root_name(node) in names and not (
             isinstance(node.slice, ast.Constant) and isinstance(node.slice.value, str)
         ):
             return True
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "get":
-            simple = (
-                len(node.args) == 1
-                and not node.keywords
-                and isinstance(node.args[0], ast.Constant)
-                and isinstance(node.args[0].value, str)
-            )
-            if not simple:
-                return True
-    return False
-
-
-def _module_level_chain(tree: ast.AST, pointers: list[list[str]]) -> bool:
-    """함수 밖에 포인터 체인이 있으면 True를 돌려준다."""
-    hidden = set()
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
-            hidden.update(ast.walk(node))
-    for node in ast.walk(tree):
-        if node in hidden:
-            continue
-        parsed = as_chain(node)
-        if parsed and parsed[1] in pointers:
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "get":
+        simple = (
+            len(node.args) == 1
+            and not node.keywords
+            and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, str)
+        )
+        if not simple and _root_name(node) in names:
             return True
     return False
 
 
-def scan_source(path: str, source: str, pointers: list[list[str]]) -> ScanResult:
+def _metaprogramming(node: ast.AST) -> bool:
+    """eval, exec, getattr, setattr 호출이면 True다."""
+    if not isinstance(node, ast.Call):
+        return False
+    func = node.func
+    if isinstance(func, ast.Name) and func.id in _META_NAMES:
+        return True
+    return isinstance(func, ast.Attribute) and func.attr in _META_NAMES
+
+
+def _collect_defaults(args: ast.arguments, collect) -> None:
+    """기본값은 그 함수 안이 아니라 바깥 범위의 식으로 모은다."""
+    for value in list(args.defaults) + list(args.kw_defaults):
+        if value is not None:
+            collect(value)
+
+
+def _walk(nodes: list[ast.AST], params: set[str], sites: list[Site], problems: list[str], path: str, pointers, operation) -> None:
+    """한 범위의 직접 대입만 응답 변수로 보고, 중첩 함수는 따로 본다."""
+    local = []
+    nested = []
+
+    def collect(node: ast.AST) -> None:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            nested.append((node.body, _parameters(node)))
+            for deco in node.decorator_list:
+                collect(deco)
+            _collect_defaults(node.args, collect)
+            return
+        if isinstance(node, ast.ClassDef):
+            nested.append((node.body, set()))
+            for deco in node.decorator_list:
+                collect(deco)
+            return
+        if isinstance(node, ast.Lambda):
+            nested.append(([node.body], _parameters(node)))
+            _collect_defaults(node.args, collect)
+            return
+        local.append(node)
+        for child in ast.iter_child_nodes(node):
+            collect(child)
+
+    for node in nodes:
+        collect(node)
+    method, op_path = operation
+    simple: dict[str, list[ast.AST]] = {}
+    unstable = set(params)
+    for node in local:
+        if _metaprogramming(node):
+            problems.append("metaprogramming")
+        pair = _simple_assign(node)
+        if pair is not None:
+            simple.setdefault(pair[0], []).append(pair[1])
+        unstable.update(_unstable_names(node))
+    fixed_names = set()
+    for name, exprs in simple.items():
+        if name in unstable or len(exprs) != 1:
+            continue
+        if _is_fixed_call(exprs[0], method, op_path):
+            fixed_names.add(name)
+    response_vars = set()
+    for name, exprs in simple.items():
+        if name in unstable or len(exprs) != 1:
+            continue
+        if _is_direct_json(exprs[0], fixed_names, method, op_path):
+            response_vars.add(name)
+    for name, exprs in simple.items():
+        if len(exprs) == 1 and isinstance(exprs[0], ast.Name) and exprs[0].id in response_vars:
+            problems.append("alias")
+    for node in local:
+        if _dynamic_on(node, response_vars):
+            problems.append("dynamic")
+        parsed = as_chain(node)
+        if parsed is None or parsed[1] not in pointers:
+            continue
+        base, keys, const = parsed
+        if base not in response_vars:
+            problems.append("not_direct")
+            continue
+        sites.append(Site(path=path, line=const.lineno, base=base, keys=list(keys)))
+    for body, nested_params in nested:
+        _walk(body, nested_params, sites, problems, path, pointers, operation)
+
+
+def scan_source(path: str, source: str, pointers: list[list[str]], operation: tuple[str, str]) -> ScanResult:
     """한 파일의 소스 문자열만 파싱해 직접 접근 위치 또는 unresolved를 돌려준다."""
+    if not _operation_ok(operation):
+        return ScanResult(unresolved=True)
     needles = {part for pointer in pointers for part in pointer}
-    if not any(part in source for part in needles):
+    if not needles or not any(part in source for part in needles):
         return ScanResult()
     try:
         tree = ast.parse(source)
     except SyntaxError:
         return ScanResult(unresolved=True)
-    if _module_level_chain(tree, pointers):
-        return ScanResult(unresolved=True)
-    sites = []
-    for fn in [node for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda))]:
-        if _dynamic_access(fn):
-            return ScanResult(unresolved=True)
-        params = _parameters(fn)
-        assigned = _assigned_names(fn)
-        for node in _local_nodes(fn):
-            parsed = as_chain(node)
-            if parsed is None or parsed[1] not in pointers:
-                continue
-            base, keys, const = parsed
-            if base not in params or base in assigned:
-                return ScanResult(unresolved=True)
-            sites.append(Site(path=path, line=const.lineno, base=base, keys=list(keys)))
-    if not sites:
+    sites: list[Site] = []
+    problems: list[str] = []
+    _walk(tree.body, set(), sites, problems, path, [list(item) for item in pointers], operation)
+    if problems or not sites:
         return ScanResult(unresolved=True)
     return ScanResult(sites=sites, unresolved=False)
 
 
-def scan_files(files: list[tuple[str, str]], pointers: list[list[str]]) -> ScanResult:
+def scan_files(files: list[tuple[str, str]], pointers: list[list[str]], operation: tuple[str, str]) -> ScanResult:
     """여러 파일을 보고, 하나라도 unresolved면 사이트를 모두 버린다."""
+    if not pointers or not _operation_ok(operation):
+        return ScanResult(unresolved=True)
     found = []
     for path, source in files:
-        result = scan_source(path, source, pointers)
+        result = scan_source(path, source, pointers, operation)
         if result.unresolved:
             return ScanResult(unresolved=True)
         found.extend(result.sites)

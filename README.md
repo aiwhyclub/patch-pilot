@@ -8,7 +8,7 @@ PatchPilot은 API 제공사가 릴리스 전에 고객 Python 코드의 영향�
 ## 지금 할 수 있는 일
 
 - OpenAPI **3.0.3 JSON** 문서 두 개와 provider mapping을 읽어, 같은 부모 객체의 마지막 키 개명(`field_renamed`)만 지원으로 분류합니다.
-- allowlist 안의 `.py` 파일을 실행하지 않고 AST로 읽어, 함수 파라미터에 직접 붙은 문자열 키 접근만 찾습니다.
+- allowlist 안의 `.py` 파일을 실행하지 않고 AST로 읽어, 승인된 operation의 JSON 응답 변수에 직접 붙은 문자열 키 접근만 찾습니다. 함수 파라미터라는 이유만으로 응답으로 보지 않습니다.
 - 사람이 만든 unified diff가 그 마지막 문자열 키만 바꾸는지 AST와 토큰으로 검사합니다.
 - 비밀 후보를 찾고, 출력에서는 `[REDACTED]`로 가립니다. 비밀이 diff 안에 있으면 마스킹만으로 통과시키지 않습니다.
 - manifest와 사람용 report를 만들고, stdout에는 계약의 영문 안내를 그대로 냅니다.
@@ -40,7 +40,7 @@ PP-AC-001부터 PP-AC-024까지 24개 수용 기준은 모두 **NOT_RUN**입니�
 4. durable lock과 append-only ledger의 재시작 복구 증명. 증명 전에는 PR 단계가 막혀 있습니다.
 5. 원본 test, expected, fixture는 읽기 전용이어야 하고, 판정은 trusted supervisor의 독립 assertion이어야 합니다. 고객 프로세스의 exit 0만으로 통과시키지 않습니다.
 
-`base_sha`는 git을 실행하지 않으므로 획득하지 않습니다. 고객 hook을 피하기 위한 결정입니다. 값이 없으면 `acquisition.base_sha`는 `not_attempted`이고 inputs의 `base_sha`는 null입니다.
+`base_sha`의 읽기 전용 adapter는 연결되어 있지 않습니다. git을 실행하지 않고, `git -c`나 고객 hook 명령을 만들지 않습니다. 1차 SHA는 시작 시 trusted supervisor가 고정하고, 2차 SHA는 `approval_gate` 다음 `base_sha_check`에서 다시 읽어 승인 binding과 비교하는 계약입니다. 둘 다 이 빌드에서는 하지 않습니다. 그래서 초기 중단의 `acquisition.base_sha`는 `not_attempted`이고 inputs의 `base_sha`는 null입니다. 이 조합은 `draft_pr_opened`와 `patch_only`에서 manifest 검사가 거부합니다. 주입된 두 SHA가 다르면 순수 함수가 `H_BASE_MOVED`를 돌려주지만, 그 함수는 고객 repo를 보지 않습니다.
 
 ## 데모 변경의 의미
 
@@ -89,7 +89,9 @@ python3 -m patchpilot run \
 | `hold` | 20 |
 | `error` | 30 |
 
-지원 변경을 찾고 직접 접근까지 확인한 정상 차단은 exit 30, `E_INTERNAL`입니다. stdout의 짧은 문장은 계약 C14의 "Internal error. See report."입니다. stderr와 stage `test_baseline_v1=blocked`가 실제 이유입니다. 계약에 "런타임 미검증" 전용 reason 코드가 없어서 새 코드를 만들지 않았습니다. 이것은 baseline 실패가 아닙니다.
+지원 변경과 직접 JSON 바인딩을 찾은 뒤의 정상 차단은 exit 30, `error` / `E_INTERNAL`입니다. stage `test_baseline_v1`은 `blocked`, attempts 1, 시각이 있고 reason도 `E_INTERNAL`입니다. 테스트 결과 `baseline_v1`은 `not_run`입니다. `not_run`은 pass도 fail도 아니고 `E_BASELINE_FAIL`도 아닙니다. 이후 stage는 skipped, attempts 0, 시각 null입니다. `open_pr=true`여도 이 지점에서는 `pr_gate_blocked`로 바꾸지 않습니다. 그 outcome은 검증 시퀀스가 끝난 뒤의 PR 전 gate 전용입니다.
+
+stdout의 짧은 문장은 계약 C14의 "Internal error. See report."입니다. stderr가 차단 이유를 적습니다. C14에 런타임 미검증 전용 reason이 없어서 새 코드를 만들지 않았습니다. 이 재사용은 내부 버그와 구분하기 어렵습니다. 전용 코드가 필요하면 Tech Lead 확정 전에는 추가하지 않습니다. 제안은 아래 "아직 정하지 않은 계약"에 있습니다.
 
 ## 입력 형식
 
@@ -100,7 +102,9 @@ python3 -m patchpilot run \
 - 이름만 비슷한 삭제와 추가를 rename으로 추론하지 않습니다. mapping이 있어야 합니다.
 - 부모가 다르면 `field_moved`로 기록하고 `supported=false`, `H_UNSUPPORTED_KIND`입니다. `field_moved`는 구현하지 않습니다.
 - allowlist glob은 전체 상대 경로에 맞춥니다. `*`는 `/`를 넘지 않고 `**`만 넘습니다. `.py`가 아니면 읽지 않습니다.
-- 직접 접근은 `payload["current_weather"]["temperature"]` 또는 `payload.get("current_weather").get("temperature")`처럼 파라미터에서 바로 이어진 체인만 인정합니다. 별칭, 재대입, 동적 키는 `H_UNRESOLVED`이고 일부 사이트만 패치하지 않습니다.
+- 직접 접근은 승인 operation과 같은 method, path가 문자열 리터럴인 호출의 JSON 응답을 한 변수에 한 번만 대입한 뒤, 그 변수에서 `body["current_weather"]["temperature"]` 또는 `body.get("current_weather").get("temperature")`로 이어진 체인만 인정합니다. `body = response.json()`처럼 고정 호출 결과에 바로 붙인 `.json()`도 포함합니다.
+- 함수 파라미터, 다른 path, 다른 method, 변수로 만든 URL, 이름만 옮긴 별칭, 재대입, 동적 키, 변수에 담지 않은 `.json()` 호출은 `H_UNRESOLVED`입니다. 그 경우 baseline stage는 blocked가 아니라 skipped입니다.
+- 응답 변수가 아닌 다른 리스트 첨자는 동적 키로 보지 않습니다. 호스트 이름은 계약 operation 식별자에 없습니다. 판정은 method와 path입니다.
 - 정적 탐색 상한은 200개 파일, 파일당 1,000,000바이트입니다. 넘으면 부분 성공으로 보지 않습니다.
 
 ## 출력
@@ -122,11 +126,37 @@ PYTHONPATH=src:. python3 -m unittest discover -s tests -v
 계약이 값을 적지 않은 부분은 아래처럼 두었습니다.
 
 - `idem_key`는 여섯 문자열을 NUL 바이트로 이어 sha256합니다.
-- 고객 실행을 막을 때 stage는 `blocked`, 테스트는 `not_run`, outcome은 `error`, reason은 `E_INTERNAL`입니다.
+- 고객 실행을 막을 때 stage는 `blocked`, 테스트는 `not_run`, outcome은 `error`, reason은 `E_INTERNAL`입니다. 이 reason을 baseline 실패나 PR gate 차단으로 읽지 않습니다.
+- 응답 변수의 AST 모양은 인자 없는 `.json()` 직접 대입입니다. `json.loads` 같은 다른 파서 모양은 계약이 문장을 주지 않아 추측하지 않고 `H_UNRESOLVED`입니다.
 - mode B/C는 다른 입력 오류보다 먼저 거부합니다.
 - 분류는 단일 operation 객체를 키 이름만 되돌린 뒤 비교합니다. `info`와 `servers` 차이는 그 비교에 넣지 않습니다.
 - 직접 사이트가 0개이면 `H_UNRESOLVED`로 멈춥니다.
 - 렌더러 경로는 `presentation/renderers/`와 `tests/presentation/`입니다. 공용 schema와 CLI가 표시 결과를 계산하지 않습니다.
+
+## 아직 정하지 않은 계약
+
+C14에는 "격리와 자원 강제가 증명되지 않아 고객 실행을 시작하지 않음"에 해당하는 reason이 없습니다. 지금 코드는 기존 `E_INTERNAL` / outcome `error` / exit 30을 유지합니다. 확정 전 새 outcome이나 새 reason은 넣지 않았습니다.
+
+최소 제안과 영향은 다음과 같습니다. Tech Lead가 고르기 전에는 구현하지 않습니다.
+
+- stage `test_baseline_v1`의 상태 `blocked`와 테스트 결과 `not_run`은 유지합니다.
+- 새 reason을 만들 경우 outcome은 기존 `error`, exit는 30을 유지하고, 안내 문장만 C14에 추가하는 쪽이 출력 계약을 덜 바꿉니다.
+- `E_BASELINE_FAIL`로 바꾸면 테스트를 실행해 실패한 것처럼 읽힙니다. `pr_gate_blocked`로 바꾸면 PR 전 gate가 이미 열렸다는 뜻이 됩니다. 둘 다 이 차단에 맞지 않습니다.
+
+`capability=False`는 안전 상수가 꺼져 있다는 표시입니다. supervisor 독립 assertion, collector 사전 baseline, durable ledger, 원격 PR 조회가 끝났다는 증거가 아닙니다.
+
+| 영역 | 상태 | 근거 |
+|---|---|---|
+| 직접 바인딩 AST, OpenAPI 분류, 패치 AST equality, manifest 검사 | 구현, 정적 단위 검사 | `scan/ast_scan.py`, `diff_spec/classify.py`, `patch/validate.py`, `schema/manifest.py` |
+| worker 결과 형식과 기대값 비교 함수 | 구현, 정적 단위 검사. 실행 경로 미연결 | `runner/worker_result.py`의 `parse_worker_line`, `assert_expected` |
+| 고객 worker 시작 | stub. 호출 시 예외. 테스트에서 호출하지 않음 | `runner/guard.py`의 `run_customer_worker` |
+| collector 파일 hash와 재해시 함수 | 구현, 정적 단위 검사 | `collector/evidence.py`의 `file_record`, `rehash_matches` |
+| 세 테스트 단계의 사전 baseline index | 미구현. 차단 run의 index는 이 단계를 포함하지 않음 | `baseline_stages_recorded` |
+| ledger 파일 lock과 append | 구현, 정적 단위 검사. 재시작 복구는 미검증 | `pr/ledger.py` |
+| PR 일치 순수 함수 | 구현, 주입 dict 검사. 원격 adapter 미연결 | `pr/policy.py`의 `pr_match` |
+| 고객 PR publisher | stub. 네트워크 없음. orchestrator가 호출하지 않음 | `pr/publisher.py` |
+| base_sha 1차/2차 읽기 | adapter 미연결. 주입값 판정만 | `core/base_sha.py` |
+| 컨테이너, cgroup, 모델 endpoint, 고객 PR 권한 | runtime 미검증. 상수 False | `core/capability.py` |
 
 ## 제품 개발 PR과 고객 PR
 

@@ -26,7 +26,7 @@ def sample(outcome: str, reason: str | None, existence: str, url=None) -> dict:
         "mode": "C",
         "stages": [
             {"name": "diff_spec", "status": "skipped", "attempts": 0},
-            {"name": "test_baseline_v1", "status": "blocked", "attempts": 1},
+            {"name": "test_baseline_v1", "status": "blocked", "attempts": 1, "reason_code": "E_INTERNAL"},
         ],
         "tests": {
             "baseline_v1": {"result": "not_run", "expected": "pass"},
@@ -62,6 +62,8 @@ class RendererTests(unittest.TestCase):
         self.assertIn(DATA_NOTICE, report)
         self.assertIn("PR creation status unknown. Manual verification required. Do not retry automatically.", report)
         self.assertIn("Blocked stages were not executed: test_baseline_v1", report)
+        self.assertIn("status=blocked", report)
+        self.assertIn("reason=E_INTERNAL", report)
         self.assertNotIn("\x1b", report)
         self.assertNotIn("Validated on", report)
 
@@ -76,6 +78,17 @@ class RendererTests(unittest.TestCase):
         text = render_stdout(sample("error", "E_NOT_A_REAL_CODE", "absent"))
         self.assertIn("Unknown status code. Manual review needed.", text)
         self.assertIn("PR not created (confirmed absent).", text)
+
+    def test_pr_existence_four_states_are_explicit(self) -> None:
+        """exists, absent, unknown, not_attempted를 서로 다른 문장으로 보여 준다."""
+        exists = render_stdout(sample("error", "E_INTERNAL", "exists", "https://example.test/pull/1"))
+        absent = render_stdout(sample("error", "E_PR_CREATE_FAILED", "absent"))
+        unknown = render_stdout(sample("error", "E_PR_RESULT_UNKNOWN", "unknown"))
+        skipped = render_stdout(sample("hold", "H_UNRESOLVED", "not_attempted"))
+        self.assertIn("https://example.test/pull/1", exists)
+        self.assertIn("PR not created (confirmed absent).", absent)
+        self.assertIn("PR creation status unknown. Manual verification required. Do not retry automatically.", unknown)
+        self.assertIn("PR creation not attempted.", skipped)
 
     def test_renderer_source_does_not_import_cli_or_core(self) -> None:
         """표시 모듈은 CLI와 core orchestration을 가져오지 않는다."""

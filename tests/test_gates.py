@@ -202,6 +202,23 @@ class SourceBoundaryTests(unittest.TestCase):
                 self.assertNotIn(word, text, path.name)
         self.assertNotIn("temperature_2m", (ROOT / "src/patchpilot/broker/adapter.py").read_text(encoding="utf-8"))
 
+    def test_cli_and_orchestrator_do_not_call_worker_or_publisher(self) -> None:
+        """테스트와 CLI 소스는 worker와 고객 PR publisher를 호출하지 않는다."""
+        calls = ("publish_draft_" + "pr(", "run_customer_" + "worker(", "subprocess.", "rev-" + "parse")
+        paths = [
+            ROOT / "src/patchpilot/cli/main.py",
+            ROOT / "src/patchpilot/core/orchestrator.py",
+            ROOT / "src/patchpilot/core/base_sha.py",
+            ROOT / "tests/test_cli_run.py",
+            ROOT / "tests/test_classify_scan_patch.py",
+            ROOT / "tests/test_base_sha.py",
+            ROOT / "tests/presentation/test_renderers.py",
+        ]
+        for path in paths:
+            text = path.read_text(encoding="utf-8")
+            for call in calls:
+                self.assertNotIn(call, text, path.name)
+
 
 if __name__ == "__main__":
     unittest.main()
