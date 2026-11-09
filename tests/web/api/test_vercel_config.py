@@ -174,6 +174,116 @@ print(json.dumps({
         self.assertIsNone(payload["held_diff"])
         self.assertEqual(payload["kind"], "pp-web-static-analysis/1")
 
+    def test_clean_project_install_serves_samples_without_user_site(self) -> None:
+        """uv sync --no-dev와 같이 프로젝트 의존성만 설치해도 samples가 응답한다."""
+        project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        dependencies = project["project"]["dependencies"]
+        self.assertEqual(dependencies, ["fastapi==0.117.1"])
+        script = r"""
+import asyncio
+import importlib.util
+import json
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+sys.path = [item for item in sys.path if item not in ("", str(root)) and str(root) not in item]
+spec = importlib.util.spec_from_file_location("src.app", root / "src/app.py")
+if spec is None or spec.loader is None:
+    raise SystemExit("missing module spec")
+module = importlib.util.module_from_spec(spec)
+sys.modules["src.app"] = module
+spec.loader.exec_module(module)
+app = module.app
+
+async def call(method, path, body=b""):
+    sent = False
+    messages = []
+
+    async def receive():
+        nonlocal sent
+        if sent:
+            return {"type": "http.disconnect"}
+        sent = True
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    async def send(message):
+        messages.append(message)
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": method,
+        "scheme": "https",
+        "path": path,
+        "raw_path": path.encode(),
+        "query_string": b"",
+        "headers": [(b"content-type", b"application/json")] if body else [],
+        "client": ("127.0.0.1", 1),
+        "server": ("test", 443),
+    }
+    await app(scope, receive, send)
+    status = next(item["status"] for item in messages if item["type"] == "http.response.start")
+    raw = b"".join(item.get("body", b"") for item in messages if item["type"] == "http.response.body")
+    return status, json.loads(raw)
+
+async def main():
+    samples_status, samples = await call("GET", "/api/v1/samples")
+    preview_body = json.dumps({"sample_id": "supported_rename"}).encode()
+    held_body = json.dumps({"sample_id": "split_parent_alias"}).encode()
+    preview_status, preview = await call("POST", "/api/v1/analyze", preview_body)
+    held_status, held = await call("POST", "/api/v1/analyze", held_body)
+    print(json.dumps({
+        "samples": samples_status,
+        "count": len(samples["samples"]),
+        "preview": preview_status,
+        "preview_diff": preview["patch_preview"]["diff"] is not None,
+        "held": held_status,
+        "held_diff": held["patch_preview"]["diff"],
+    }))
+
+asyncio.run(main())
+"""
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="pp-dep-") as temporary:
+            venv = Path(temporary) / "venv"
+            created = subprocess.run(
+                [sys.executable, "-m", "venv", str(venv)],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(created.returncode, 0, created.stderr)
+            pip = venv / "bin" / "pip"
+            installed = subprocess.run(
+                [str(pip), "install", "--disable-pip-version-check", str(ROOT)],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(installed.returncode, 0, installed.stderr)
+            env = os.environ.copy()
+            env.pop("PYTHONPATH", None)
+            env["PYTHONNOUSERSITE"] = "1"
+            completed = subprocess.run(
+                [str(venv / "bin" / "python"), "-c", script, str(ROOT)],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=env,
+                cwd=ROOT,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            payload = json.loads(completed.stdout)
+        self.assertEqual(payload["samples"], 200)
+        self.assertEqual(payload["count"], 2)
+        self.assertEqual(payload["preview"], 200)
+        self.assertTrue(payload["preview_diff"])
+        self.assertEqual(payload["held"], 200)
+        self.assertIsNone(payload["held_diff"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -159,7 +159,7 @@ PYTHONPATH=src:. .venv/bin/python -m patchpilot.web.local
 - Entrypoint: `pyproject.toml`의 `[tool.vercel] entrypoint = "src.app:app"`. 빌더는 모듈 경로의 점을 슬래시로 바꿔 저장소 루트의 `src/app.py` 또는 `src/app/__init__.py`만 찾습니다. `src/` 아래 패키지 경로를 자동으로 앞에 붙이지 않으므로 `patchpilot.web.app:app`은 `patchpilot/web/app.py`가 없어 `PYTHON_ENTRYPOINT_NOT_FOUND`가 됩니다. `src/app.py`는 `src`를 경로에 넣은 뒤 `patchpilot.web.app`의 `app`을 내보냅니다.
 - `vercel.json`의 functions 키는 그 해석 결과와 같은 `src/app.py`이고 maxDuration 30입니다. `includeFiles`는 `src/patchpilot/**`입니다. `runtime`은 넣지 않습니다. 그 값은 `vercel-php@0.5.2`처럼 버전을 포함한 커뮤니티 런타임 패키지 이름이고, `python3.12`를 넣으면 빌드가 `invalid_function_runtime`으로 바로 실패합니다.
 - 웹 배포의 Python은 루트 `.python-version`의 `3.12`입니다. 지정하지 않아도 공식 기본값은 3.12입니다. CLI `requires-python`은 `>=3.11` 그대로입니다.
-- Install: `requirements.txt`. 첫 줄 `.`가 이 패키지를 설치하고, FastAPI는 그 파일에 고정합니다.
+- Install: `pyproject.toml`이 있으면 빌더는 `requirements.txt`를 읽지 않고 `[project.dependencies]`만 설치합니다. 함수 import에 필요한 항목은 `fastapi==0.117.1`입니다. `requirements.txt`의 `uvicorn`과 `httpx`는 로컬 서버와 테스트용입니다.
 - `public/**`는 CDN이 루트 경로로 제공합니다. FastAPI 앱은 그 디렉터리를 mount하지 않습니다. `src/patchpilot/web/local.py`의 mount는 로컬 확인용입니다.
 
 공식 설명은 Python 런타임과 FastAPI 문서, 그리고 public 정적 파일을 CDN에서 제공한다는 changelog를 따릅니다. https://vercel.com/docs/functions/runtimes/python https://vercel.com/docs/functions/runtimes/python/python-version https://vercel.com/docs/frameworks/backend/fastapi https://vercel.com/changelog/fastapi-frontends-and-static-files-served-from-the-cdn

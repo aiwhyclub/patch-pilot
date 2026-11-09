@@ -8,6 +8,9 @@ version = "0.1.0"
 description = "Pre-release API change check CLI. Mode A classification and static checks only."
 requires-python = ">=3.11"
 readme = "README.md"
+dependencies = [
+  "fastapi==0.117.1",
+]
 
 [project.scripts]
 patchpilot = "patchpilot.cli.main:main"
