@@ -96,6 +96,28 @@ button, #download {
 
 button:disabled { background: #b7aa9c; color: #2b261f; }
 
+.mast-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+}
+
+.lang { display: inline-flex; }
+
+.lang button {
+  background: var(--panel);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  padding: 0.3rem 0.7rem;
+}
+
+.lang button[aria-pressed="true"] {
+  background: var(--copper);
+  color: #fffaf2;
+  border-color: var(--copper);
+}
+
 button:focus-visible, a:focus-visible, input:focus-visible {
   outline: 3px solid var(--focus);
   outline-offset: 2px;

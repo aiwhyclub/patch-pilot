@@ -1,61 +1,68 @@
 <!DOCTYPE html>
-<html lang="ko">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>PatchPilot 정적 분석</title>
+  <title data-i18n="title">PatchPilot static analysis</title>
   <link rel="stylesheet" href="/app.css">
 </head>
 <body>
   <header class="mast">
-    <p class="eyebrow">PatchPilot</p>
-    <h1>팀 합성 샘플의 정적 분석</h1>
-    <p class="lead">같은 부모의 마지막 키 이름 변경만 읽고, 그 결과를 이 브라우저에 보여 줍니다. 고객 저장소, 파일 업로드, 모델 호출, 고객 테스트, 고객 PR은 하지 않습니다. 분석 요청은 이 사이트의 <code>/api/v1/analyze</code>로만 갑니다.</p>
+    <div class="mast-top">
+      <p class="eyebrow">PatchPilot</p>
+      <div id="lang-switch" class="lang" role="group" aria-label="Language">
+        <button type="button" data-set-lang="ko" aria-pressed="false">KO</button>
+        <button type="button" data-set-lang="en" aria-pressed="true">EN</button>
+      </div>
+    </div>
+    <h1 data-i18n="heading">Static analysis of team-synthetic samples</h1>
+    <p class="lead"><span data-i18n="leadBefore">Reads only a same-parent last-key rename and shows the result in this browser. It does not access a customer repository, upload files, call a model, run customer tests, or open a customer PR. Analysis requests go only to </span><code>/api/v1/analyze</code><span data-i18n="leadAfter">.</span></p>
     <ul class="marks">
-      <li>샘플(팀 합성)</li>
-      <li>runtime: 미연결(not_run, E_RUNTIME_NOT_READY)</li>
-      <li>PR: 미시도(not_attempted)</li>
-      <li>AC24: NOT_RUN</li>
+      <li data-i18n="markSample">Sample (team synthetic)</li>
+      <li data-i18n="markRuntime">runtime: not connected (not_run, E_RUNTIME_NOT_READY)</li>
+      <li data-i18n="markPr">PR: not attempted (not_attempted)</li>
+      <li data-i18n="markAc">AC24: NOT_RUN</li>
     </ul>
     <blockquote id="data-notice"></blockquote>
   </header>
   <main>
     <section id="sample-panel" aria-labelledby="sample-title">
-      <h2 id="sample-title">샘플 선택</h2>
-      <p id="sample-hint">샘플을 먼저 선택</p>
+      <h2 id="sample-title" data-i18n="sampleTitle">Choose a sample</h2>
+      <p id="sample-hint" data-i18n="sampleHint">Choose a sample first</p>
       <fieldset>
-        <legend>팀 합성 샘플 하나</legend>
+        <legend data-i18n="sampleLegend">One team-synthetic sample</legend>
         <div id="sample-list"></div>
       </fieldset>
       <div id="preview" hidden>
-        <p class="caption">example.test 와 temperature_2m 은 팀 합성 이름이며 Open-Meteo의 실제 변경이 아닙니다.</p>
-        <h3>OpenAPI v1</h3>
+        <p class="caption" data-i18n="caption">example.test and temperature_2m are team-synthetic names, not a real Open-Meteo change.</p>
+        <h3 data-i18n="previewOld">OpenAPI v1</h3>
         <pre id="preview-old"></pre>
-        <h3>OpenAPI v2</h3>
+        <h3 data-i18n="previewNew">OpenAPI v2</h3>
         <pre id="preview-new"></pre>
-        <h3>mapping</h3>
+        <h3 data-i18n="previewMapping">mapping</h3>
         <pre id="preview-mapping"></pre>
-        <h3>Python</h3>
+        <h3 data-i18n="previewSource">Python</h3>
         <pre id="preview-source"></pre>
       </div>
     </section>
     <section id="analysis-panel" aria-labelledby="analysis-title">
-      <h2 id="analysis-title">정적 분석</h2>
-      <button id="analyze" type="button" disabled>분석 실행</button>
+      <h2 id="analysis-title" data-i18n="analysisTitle">Static analysis</h2>
+      <button id="analyze" type="button" disabled>Run analysis</button>
       <p id="live" aria-live="polite"></p>
       <div id="stages"></div>
       <div id="diff-region"></div>
     </section>
     <section id="block-panel" aria-labelledby="block-title">
-      <h2 id="block-title">차단</h2>
+      <h2 id="block-title" data-i18n="blockTitle">Blocked</h2>
       <div id="blocks"></div>
     </section>
     <section id="export-panel" aria-labelledby="export-title">
-      <h2 id="export-title">진단 내보내기</h2>
-      <p id="export-hint">분석 후 내보내기 가능</p>
-      <a id="download" hidden download="patchpilot-web-static-analysis.json">현재 분석 JSON 저장</a>
+      <h2 id="export-title" data-i18n="exportTitle">Export diagnostics</h2>
+      <p id="export-hint" data-i18n="exportHint">Export available after analysis</p>
+      <a id="download" hidden download="patchpilot-web-static-analysis.json" data-i18n="download">Save current analysis JSON</a>
     </section>
   </main>
+  <script src="/i18n.js" defer></script>
   <script src="/app.js" defer></script>
 </body>
 </html>
