@@ -112,9 +112,15 @@ pre, .diff {
   font: 0.82rem/1.45 ui-monospace, "Source Code Pro", Menlo, Consolas, monospace;
 }
 
-.stage { border-top: 1px solid var(--line); padding-top: 0.6rem; margin-top: 0.6rem; }
+.stage { border-top: 1px solid var(--line); padding-top: 0.6rem; margin-top: 0.6rem; min-width: 0; }
 
 .stage-meta { margin: 0; color: var(--muted); font-size: 0.85rem; }
+
+.stage p:last-child {
+  overflow-wrap: anywhere;
+  word-break: break-all;
+  min-width: 0;
+}
 
 .cards { display: grid; gap: 0.6rem; }
 
