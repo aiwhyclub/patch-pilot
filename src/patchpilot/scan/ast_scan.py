@@ -267,6 +267,14 @@ def _unstable_names(node: ast.AST) -> set[str]:
     return names
 
 
+def _proper_prefix(keys: list[str], pointers: list[list[str]]) -> bool:
+    """포인터보다 짧은 앞부분이면 True다. 전체 체인과 다른 키는 접두가 아니다."""
+    for pointer in pointers:
+        if 0 < len(keys) < len(pointer) and pointer[: len(keys)] == keys:
+            return True
+    return False
+
+
 def _chain_root(node: ast.AST):
     """상수 키 체인의 맨 앞 Name 노드를 돌려준다. 없으면 None이다."""
     current = node
@@ -389,12 +397,29 @@ def _walk(nodes: list[ast.AST], params: set[str], sites: list[Site], problems: l
         if len(exprs) == 1 and isinstance(exprs[0], ast.Name) and exprs[0].id in response_vars:
             problems.append("alias")
     chain_roots = set()
+    continued = set()
     for node in local:
-        if as_chain(node) is None:
+        if isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Constant) and isinstance(node.slice.value, str):
+            continued.add(id(node.value))
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "get"
+            and len(node.args) == 1
+            and not node.keywords
+            and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, str)
+        ):
+            continued.add(id(node.func.value))
+        parsed = as_chain(node)
+        if parsed is None:
             continue
         root = _chain_root(node)
         if root is not None:
             chain_roots.add(id(root))
+        base, keys, _const = parsed
+        if base in response_vars and _proper_prefix(keys, pointers) and id(node) not in continued:
+            problems.append("alias")
     for node in local:
         if (
             isinstance(node, ast.Name)

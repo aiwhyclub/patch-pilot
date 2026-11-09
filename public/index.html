@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PatchPilot 정적 분석</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <header class="mast">
+    <p class="eyebrow">PatchPilot</p>
+    <h1>팀 합성 샘플의 정적 분석</h1>
+    <p class="lead">같은 부모의 마지막 키 이름 변경만 읽고, 그 결과를 이 브라우저에 보여 줍니다. 고객 저장소, 파일 업로드, 모델 호출, 고객 테스트, 고객 PR은 하지 않습니다. 분석 요청은 이 사이트의 <code>/api/v1/analyze</code>로만 갑니다.</p>
+    <ul class="marks">
+      <li>샘플(팀 합성)</li>
+      <li>runtime: 미연결(not_run, E_RUNTIME_NOT_READY)</li>
+      <li>PR: 미시도(not_attempted)</li>
+      <li>AC24: NOT_RUN</li>
+    </ul>
+    <blockquote id="data-notice"></blockquote>
+  </header>
+  <main>
+    <section id="sample-panel" aria-labelledby="sample-title">
+      <h2 id="sample-title">샘플 선택</h2>
+      <p id="sample-hint">샘플을 먼저 선택</p>
+      <fieldset>
+        <legend>팀 합성 샘플 하나</legend>
+        <div id="sample-list"></div>
+      </fieldset>
+      <div id="preview" hidden>
+        <p class="caption">example.test 와 temperature_2m 은 팀 합성 이름이며 Open-Meteo의 실제 변경이 아닙니다.</p>
+        <h3>OpenAPI v1</h3>
+        <pre id="preview-old"></pre>
+        <h3>OpenAPI v2</h3>
+        <pre id="preview-new"></pre>
+        <h3>mapping</h3>
+        <pre id="preview-mapping"></pre>
+        <h3>Python</h3>
+        <pre id="preview-source"></pre>
+      </div>
+    </section>
+    <section id="analysis-panel" aria-labelledby="analysis-title">
+      <h2 id="analysis-title">정적 분석</h2>
+      <button id="analyze" type="button" disabled>분석 실행</button>
+      <p id="live" aria-live="polite"></p>
+      <div id="stages"></div>
+      <div id="diff-region"></div>
+    </section>
+    <section id="block-panel" aria-labelledby="block-title">
+      <h2 id="block-title">차단</h2>
+      <div id="blocks"></div>
+    </section>
+    <section id="export-panel" aria-labelledby="export-title">
+      <h2 id="export-title">진단 내보내기</h2>
+      <p id="export-hint">분석 후 내보내기 가능</p>
+      <a id="download" hidden download="patchpilot-web-static-analysis.json">현재 분석 JSON 저장</a>
+    </section>
+  </main>
+  <script src="/app.js" defer></script>
+</body>
+</html>

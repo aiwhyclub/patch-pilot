@@ -14,3 +14,6 @@ patchpilot = "patchpilot.cli.main:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.vercel]
+entrypoint = "patchpilot.web.app:app"

@@ -105,6 +105,7 @@ stdout의 짧은 문장은 `Runtime prerequisites are not verified. No customer 
 - 직접 접근은 승인 operation과 같은 method, path가 URL 칸에 있는 호출의 JSON 응답을 한 변수에 한 번만 대입한 뒤, 그 변수에서 `body["current_weather"]["temperature"]` 또는 `body.get("current_weather").get("temperature")`로 이어진 체인만 인정합니다. method는 `requests.get`처럼 호출 속성 이름이거나 `client.request`의 method 칸입니다. `note="/v1/weather"`처럼 다른 칸에만 path가 있으면 인정하지 않습니다. `body = response.json()`처럼 고정 호출 결과에 바로 붙인 `.json()`도 포함합니다.
 - 계약은 callee 라이브러리 이름을 정하지 않습니다. 그래서 `cache.get("/v1/weather")`는 기존 속성-method 모양으로 남고, 그 callee가 HTTP 클라이언트라는 뜻은 아닙니다.
 - 함수 파라미터, 다른 path, 다른 method, 변수로 만든 URL, 이름 별칭, 응답 객체를 속성·컨테이너에 저장하는 alias, 재대입, comprehension·except·with·async for·import·match가 같은 이름을 묶는 경우, 동적 키, 변수에 담지 않은 `.json()` 호출은 `H_UNRESOLVED`입니다. comprehension의 다른 반복 이름이나 match의 다른 capture는 응답 변수를 묶지 않습니다. 그 경우 baseline stage는 blocked가 아니라 skipped입니다.
+- 응답 체인의 앞부분만 다른 이름에 나누면, 같은 함수에 전체 체인이 있어도 `H_UNRESOLVED`입니다. `saved = body["current_weather"]` 뒤에 `body["current_weather"]["temperature"]`가 있는 경우가 그렇습니다. `body["current_weather"]["windspeed"]`처럼 길이가 같고 마지막 키가 다른 형제 접근은 그 이유로 버리지 않습니다.
 - path item의 `parameters`, `summary`, `description`, `servers`, `x-*`가 옛 문서와 다르면 rename만으로 `supported`가 되지 않고 `H_UNSUPPORTED_KIND`입니다. 문서 루트의 `info`와 `servers`는 이 비교에 넣지 않습니다.
 - 패치 경로는 `tests/`, `test/`, `fixtures/`, `fixture/`, `.github/`와 `test.py`, `tests.py`, `fixture.py`, `fixtures.py`를 대소문자 구분 없이 거부합니다. `client.py`, `contest.py`, `latest.py`처럼 이름 일부만 비슷한 일반 코드는 그 이유만으로 거부하지 않습니다.
 - 비밀 검사는 후보 패턴입니다. 따옴표 없는 `password` / `secret` / `token` / `api_key` 대입도 `H_PATCH_REJECTED`와 `H_MODEL_SEND_BLOCKED`에 포함합니다. 모든 비밀 형태를 찾는다고 보지 않습니다.
@@ -120,13 +121,48 @@ PR을 만들지 않았으면 문장은 `PR creation not attempted.`입니다. UR
 
 ## 개발 검사
 
+CLI만 볼 때는 아래면 됩니다. 웹 경로 검사까지 포함한 전체 발견은 FastAPI가 설치된 인터프리터가 필요합니다.
+
 ```bash
 PYTHONPATH=src:. python3 -m unittest discover -s tests -t . -v
+```
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+PYTHONPATH=src:. .venv/bin/python -m unittest discover -s tests -t . -v
 ```
 
 `-t .`가 필요합니다. `tests/presentation/`은 제품 패키지 `presentation`과 디렉터리 이름이 같습니다. top을 저장소 루트로 두지 않으면 테스트 디렉터리가 `presentation`을 가립니다.
 
 이 명령은 네트워크, 고객 코드 실행, 고객 PR publisher를 호출하지 않습니다. `ObviousFakeModel`은 이름이 말하듯 가짜이며 diff를 만들지 않습니다. 규칙으로 `temperature`를 `temperature_2m`으로 바꿔 성공이라고 말하지 않습니다.
+
+## 웹 정적 분석 화면
+
+브라우저에서 팀이 만든 샘플만 고릅니다. `GET /api/v1/samples`가 목록과 읽기 전용 미리보기를 주고, `POST /api/v1/analyze`는 `{"sample_id": "..."}`만 받습니다. 본문은 4 KiB 이하입니다. 고객 URL, 업로드, 자유 코드, 원격 저장소는 받지 않습니다. 브라우저가 이 사이트의 API를 호출하는 것은 같은 origin 분석이며, 외부 모델이나 고객 저장소 호출이 아닙니다.
+
+응답 `envelope_kind`는 `pp-web-static-analysis/1`입니다. CLI manifest가 아니므로 `cli_manifest_claim`은 false입니다. runtime은 `not_run` / `E_RUNTIME_NOT_READY`, PR은 `not_attempted`, AC24는 `NOT_RUN`입니다. `diff`는 classify, scan, patch_preview가 모두 ok이고 `validate_patch`를 통과한 결정적 미리보기일 때만 문자열이 됩니다. 그 미리보기는 모델이 만든 수정이나 고객 테스트 성공이 아닙니다. 부모 조각을 나눈 `split_parent_alias` 샘플은 `H_UNRESOLVED`이고 `diff`는 null입니다. 샘플을 바꾸거나 다시 분석하거나 오류가 나면 화면의 이전 결과와 다운로드는 지워집니다.
+
+로컬에서 보려면 웹 의존성을 설치한 뒤 다음을 실행하고 `http://127.0.0.1:8000/`을 엽니다.
+
+```bash
+PYTHONPATH=src:. .venv/bin/python -m patchpilot.web.local
+```
+
+### 배포 설정
+
+이 저장소는 Vercel 프로젝트를 만들거나 배포하지 않습니다. 배포는 별도의 프로젝트 설정으로 합니다. 추가 환경 변수, 데이터베이스, Blob, 모델 키는 필요 없습니다.
+
+- Framework: FastAPI
+- Root Directory: 저장소 루트. 하위 디렉터리로 두지 않습니다.
+- Output Directory: 비웁니다. `public`으로 두면 Function이 빠집니다.
+- Entrypoint: `pyproject.toml`의 `[tool.vercel] entrypoint = "patchpilot.web.app:app"`. 파일은 `src/patchpilot/web/app.py`, 변수는 `app`입니다.
+- `vercel.json`의 functions 키는 `src/patchpilot/web/app.py`, runtime `python3.12`, maxDuration 30입니다.
+- 웹 Function의 Python은 3.12입니다. CLI `requires-python`은 `>=3.11` 그대로입니다.
+- Install: `requirements.txt`. 첫 줄 `.`가 이 패키지를 설치하고, FastAPI는 그 파일에 고정합니다.
+- `public/**`는 CDN이 루트 경로로 제공합니다. FastAPI 앱은 그 디렉터리를 mount하지 않습니다. `src/patchpilot/web/local.py`의 mount는 로컬 확인용입니다.
+
+공식 설명은 Python 런타임과 FastAPI 문서, 그리고 public 정적 파일을 CDN에서 제공한다는 changelog를 따릅니다. https://vercel.com/docs/functions/runtimes/python https://vercel.com/docs/functions/runtimes/python/python-version https://vercel.com/docs/frameworks/backend/fastapi https://vercel.com/changelog/fastapi-frontends-and-static-files-served-from-the-cdn
 
 ## 구현에서 정한 것
 
@@ -156,6 +192,7 @@ PYTHONPATH=src:. python3 -m unittest discover -s tests -t . -v
 | base SHA adapter | 미연결. 주입값과 차단 원인만 | `core/base_sha.py`의 `adapter_block_cause` |
 | 고객 PR publisher | 미연결. 호출 판정은 False이고 성공을 기록하지 않음 | `pr/publisher.py`의 `publisher_decision` |
 | 모델 전송 | 미연결. provider identity가 없으면 차단 | `broker/adapter.py`의 `send_gate` |
+| 웹 샘플 정적 분석 | 구현. 샘플 식별자만 받고 CLI manifest를 만들지 않음 | `web/analyze.py`, `web/app.py`, `public/` |
 | 컨테이너, cgroup, 모델 endpoint, 고객 PR 권한 | runtime 미검증. 상수 False | `core/capability.py` |
 
 ## 제품 개발 PR과 고객 PR

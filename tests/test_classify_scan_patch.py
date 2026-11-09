@@ -473,6 +473,44 @@ class ScanTests(unittest.TestCase):
         self.assertTrue(_scan(box).unresolved)
         self.assertEqual(_scan(box).sites, [])
 
+    def test_parent_slice_alias_mixed_with_direct_chain_is_unresolved(self) -> None:
+        """부모 조각을 다른 이름에 나누면 전체 체인이 같이 있어도 직접 사이트로 끝내지 않는다."""
+        split = (
+            "def read_temp():\n"
+            "    body = requests.get('/v1/weather').json()\n"
+            "    saved = body['current_weather']\n"
+            "    shown = body['current_weather']['temperature']\n"
+            "    hidden = saved['temperature']\n"
+            "    return shown\n"
+        )
+        dotted = (
+            "def read_temp():\n"
+            "    body = requests.get('/v1/weather').json()\n"
+            "    saved = body.get('current_weather')\n"
+            "    shown = body.get('current_weather').get('temperature')\n"
+            "    hidden = saved.get('temperature')\n"
+            "    return shown\n"
+        )
+        parent_only = (
+            "def read_temp():\n"
+            "    body = requests.get('/v1/weather').json()\n"
+            "    saved = body['current_weather']\n"
+            "    return saved['temperature']\n"
+        )
+        sibling = (
+            "def read_temp():\n"
+            "    body = requests.get('/v1/weather').json()\n"
+            "    wind = body['current_weather']['windspeed']\n"
+            "    return body['current_weather']['temperature']\n"
+        )
+        for name, source in (("split", split), ("get", dotted), ("parent", parent_only)):
+            result = _scan(source)
+            self.assertTrue(result.unresolved, name)
+            self.assertEqual(result.sites, [], name)
+        kept = _scan(sibling)
+        self.assertFalse(kept.unresolved)
+        self.assertEqual(kept.sites[0].keys, ["current_weather", "temperature"])
+
     def test_path_literal_outside_the_url_slot_is_unresolved(self) -> None:
         """path 문자열이 URL 칸이 아니면 승인 operation 호출이 아니다."""
         helper = (
