@@ -227,6 +227,7 @@ class SourceBoundaryTests(unittest.TestCase):
             ROOT / "src/patchpilot/web/app.py",
             ROOT / "src/patchpilot/web/samples.py",
             ROOT / "src/patchpilot/web/local.py",
+            ROOT / "src/app.py",
         ]
         for path in paths:
             text = path.read_text(encoding="utf-8")

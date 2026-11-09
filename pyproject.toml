@@ -16,4 +16,4 @@ patchpilot = "patchpilot.cli.main:main"
 where = ["src"]
 
 [tool.vercel]
-entrypoint = "patchpilot.web.app:app"
+entrypoint = "src.app:app"

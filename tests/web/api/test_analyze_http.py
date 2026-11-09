@@ -136,7 +136,7 @@ class AnalyzeHttpTests(unittest.TestCase):
             "ex" + "ec(",
             "import " + "requests",
         )
-        paths = list((ROOT / "src/patchpilot/web").glob("*.py"))
+        paths = [ROOT / "src/app.py", *(ROOT / "src/patchpilot/web").glob("*.py")]
         self.assertGreaterEqual(len(paths), 4)
         for path in paths:
             text = path.read_text(encoding="utf-8")
