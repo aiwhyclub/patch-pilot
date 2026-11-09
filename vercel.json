@@ -1,0 +1,10 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "functions": {
+    "src/app.py": {
+      "maxDuration": 30,
+      "includeFiles": "src/patchpilot/**",
+      "excludeFiles": "{tests/**,public/**,.venv/**}"
+    }
+  }
+}
