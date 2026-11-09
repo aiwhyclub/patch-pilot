@@ -157,8 +157,8 @@ PYTHONPATH=src:. .venv/bin/python -m patchpilot.web.local
 - Root Directory: 저장소 루트. 하위 디렉터리로 두지 않습니다.
 - Output Directory: 비웁니다. `public`으로 두면 Function이 빠집니다.
 - Entrypoint: `pyproject.toml`의 `[tool.vercel] entrypoint = "patchpilot.web.app:app"`. 파일은 `src/patchpilot/web/app.py`, 변수는 `app`입니다.
-- `vercel.json`의 functions 키는 `src/patchpilot/web/app.py`, runtime `python3.12`, maxDuration 30입니다.
-- 웹 Function의 Python은 3.12입니다. CLI `requires-python`은 `>=3.11` 그대로입니다.
+- `vercel.json`의 functions 키는 `src/patchpilot/web/app.py`, maxDuration 30입니다. `runtime`은 넣지 않습니다. 그 값은 `vercel-php@0.5.2`처럼 버전을 포함한 커뮤니티 런타임 패키지 이름이고, `python3.12`를 넣으면 빌드가 `invalid_function_runtime`으로 바로 실패합니다.
+- 웹 배포의 Python은 루트 `.python-version`의 `3.12`입니다. 지정하지 않아도 공식 기본값은 3.12입니다. CLI `requires-python`은 `>=3.11` 그대로입니다.
 - Install: `requirements.txt`. 첫 줄 `.`가 이 패키지를 설치하고, FastAPI는 그 파일에 고정합니다.
 - `public/**`는 CDN이 루트 경로로 제공합니다. FastAPI 앱은 그 디렉터리를 mount하지 않습니다. `src/patchpilot/web/local.py`의 mount는 로컬 확인용입니다.
 
